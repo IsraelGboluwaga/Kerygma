@@ -1,0 +1,9 @@
+# Sermon Videos to Ingest
+# Add YouTube URLs here, one per line
+# Lines starting with # are comments and will be ignored
+
+# Example:
+# https://youtube.com/watch?v=abc123
+# https://youtube.com/watch?v=def456
+
+# Add new sermon URLs below:

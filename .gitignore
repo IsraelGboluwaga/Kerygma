@@ -1,8 +1,32 @@
+# Environment variables
 .env
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+
+# Testing
 .pytest_cache/
-data/sermons.db
+.coverage
+htmlcov/
+
+# Database (entire data directory)
+data/
+
+# Virtual environment
 venv/
+env/
+
+# IDEs
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
