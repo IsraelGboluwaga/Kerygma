@@ -5,7 +5,9 @@ Usage: python -m src.admin ingest <youtube_urls...>
 
 import sys
 import logging
-from .ingestion import process_youtube_video
+import traceback
+from .ingestion import process_youtube_video, VideoTooLongError
+from .config import settings
 from .chunker import chunk_sermon
 from .storage import (
     init_database,
@@ -18,9 +20,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def ingest_videos(urls: list[str], speaker: str = None) -> None:
+def ingest_videos(urls: list[str], speaker: str | None = None) -> None:
     """Ingest multiple sermon videos (admin only)."""
     init_database()
+    skipped: list[tuple[str, str]] = []  # (url, reason)
 
     for i, url in enumerate(urls, 1):
         try:
@@ -55,20 +58,30 @@ def ingest_videos(urls: list[str], speaker: str = None) -> None:
                 f"    Sermon ID: {sermon_id}"
             )
 
+        except VideoTooLongError as e:
+            logger.warning(f"  ⚠ Skipped (too long): {e}")
+            skipped.append((url, str(e)))
         except Exception as e:
             logger.error(f"  ✗ Failed: {e}")
-            import traceback
             logger.debug(traceback.format_exc())
+
+    if skipped:
+        limit_min = settings.max_video_duration_seconds // 60
+        logger.warning(f"\n{'='*60}")
+        logger.warning(f"Skipped {len(skipped)} video(s) exceeding the {limit_min}-min limit:")
+        for url, reason in skipped:
+            logger.warning(f"  • {url}\n    {reason}")
+        logger.warning(f"{'='*60}")
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Sermon-MCP Admin Tool")
+        print("Kerygma Admin Tool")
         print("=" * 60)
         print("\nUsage: python -m src.admin ingest <youtube_url> [<youtube_url>...] [--speaker <name>]")
         print("\nExamples:")
         print('  # Single video')
-        print('  python -m src.admin ingest https://youtube.com/watch?v=abc123 --speaker "Pastor John"')
+        print('  python -m src.admin ingest https://youtube.com/watch?v=abc123 --speaker "Apostle Emmanuel Iren"')
         print()
         print('  # Multiple videos')
         print('  python -m src.admin ingest \\')
@@ -104,7 +117,7 @@ def main():
         sys.exit(1)
 
     print(f"\n{'='*60}")
-    print(f"Ingesting {len(urls)} sermon video(s)")
+    print(f"Kerygma - Ingesting {len(urls)} sermon video(s)")
     if speaker:
         print(f"Speaker: {speaker}")
     print(f"{'='*60}\n")

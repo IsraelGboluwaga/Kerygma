@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "sermon-mcp"
+name = "kerygma"
 version = "0.1.0"
-description = "Church Sermon Knowledge Base MCP Server"
+description = "Kerygma - Church Sermon Knowledge Base MCP Server"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=0.9.0",
@@ -24,7 +24,7 @@ dev = [
 ]
 
 [project.scripts]
-sermon-mcp = "src.server:main"
+kerygma = "src.server:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]

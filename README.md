@@ -1,13 +1,15 @@
-# Sermon-MCP
+# Kerygma
 
 > A Model Context Protocol (MCP) server that transforms YouTube sermon videos into a searchable knowledge base with AI-powered Q&A.
+
+**Kerygma** (κήρυγμα) - Greek word meaning "proclamation" or "preaching of the gospel"
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-Sermon-MCP is a church knowledge base system that allows administrators to ingest YouTube sermon videos and enables church members to ask questions about church teachings through an MCP interface. The system intelligently chunks sermons using Claude AI and provides answers with citations and timestamps.
+Kerygma is a church knowledge base system that allows administrators to ingest YouTube sermon videos and enables church members to ask questions about church teachings through an MCP interface. The system intelligently chunks sermons using Claude AI and provides answers with citations and timestamps.
 
 ### Key Features
 
@@ -70,7 +72,7 @@ Sermon-MCP is a church knowledge base system that allows administrators to inges
 1. **Clone the repository**
    ```bash
    git clone <your-repo-url>
-   cd sermon-mcp
+   cd kerygma
    ```
 
 2. **Create virtual environment**
@@ -113,7 +115,7 @@ Church administrators use the admin script to build and maintain the sermon know
 
 ```bash
 # Single video
-python -m src.admin ingest https://youtube.com/watch?v=VIDEO_ID --speaker "Pastor John"
+python -m src.admin ingest https://youtube.com/watch?v=VIDEO_ID --speaker "Apostle Emmanuel Iren"
 
 # Multiple videos
 python -m src.admin ingest \
@@ -136,10 +138,10 @@ python -m src.admin ingest \
 2. Run the ingestion:
    ```bash
    # Linux/Mac
-   python -m src.admin ingest $(grep -v "^#" sermons_to_ingest.txt) --speaker "Pastor John"
+   python -m src.admin ingest $(grep -v "^#" sermons_to_ingest.txt) --speaker "Apostle Emmanuel Iren"
 
    # Windows PowerShell
-   python -m src.admin ingest (Get-Content sermons_to_ingest.txt | Where-Object { $_ -notmatch "^#" }) --speaker "Pastor John"
+   python -m src.admin ingest (Get-Content sermons_to_ingest.txt | Where-Object { $_ -notmatch "^#" }) --speaker "Apostle Emmanuel Iren"
    ```
 
 3. After successful ingestion, remove or comment out the processed URLs
@@ -155,8 +157,8 @@ Every week after a new sermon is uploaded:
 **Example Output:**
 ```
 ============================================================
-Ingesting 2 sermon video(s)
-Speaker: Pastor John
+Kerygma - Ingesting 2 sermon video(s)
+Speaker: Apostle Emmanuel Iren
 ============================================================
 
 INFO:src.admin:[1/2] Processing https://youtube.com/watch?v=abc123
@@ -187,10 +189,10 @@ Add to your MCP client settings (e.g., `~/Library/Application Support/Claude/cla
 ```json
 {
   "mcpServers": {
-    "sermon-knowledge-base": {
+    "kerygma": {
       "command": "python",
       "args": ["-m", "src.server"],
-      "cwd": "/path/to/sermon-mcp",
+      "cwd": "/path/to/kerygma",
       "env": {
         "ANTHROPIC_API_KEY": "your-api-key",
         "DB_PATH": "data/sermons.db"
@@ -215,7 +217,7 @@ User: Show me recent sermons
 ```
 • Sunday Morning Service - Faith and Prayer
   Date: 2024-03-10
-  Speaker: Pastor John
+  Speaker: Apostle Emmanuel Iren
   URL: https://youtube.com/watch?v=abc123
 
 • Midweek Service - Prayer and Fasting
@@ -233,7 +235,7 @@ Ask questions and get AI-generated answers with citations.
 ```
 User: What does our church teach about tithing?
 User: What is the church's position on prayer?
-User: What did Pastor John say about faith in March?
+User: What did Apostle Emmanuel Iren say about faith in March?
 ```
 
 **Parameters:**
@@ -244,7 +246,7 @@ User: What did Pastor John say about faith in March?
 ```
 Based on the sermon excerpts, the church teaches that tithing is an act
 of obedience and faith. In the Sunday Morning Service (2024-03-10),
-Pastor John explained that "tithing is not just about money, it's about
+Apostle Emmanuel Iren explained that "tithing is not just about money, it's about
 trusting God with our finances" [62:15].
 
 The teaching emphasizes that when we give our first fruits to God, we
@@ -274,7 +276,7 @@ User: Show me the sermon from 2024-03-10
 ```
 Title: Sunday Morning Service - Faith and Prayer
 Date: 2024-03-10
-Speaker: Pastor John
+Speaker: Apostle Emmanuel Iren
 URL: https://youtube.com/watch?v=abc123
 Outline:
   - Introduction: Welcome and opening prayer
@@ -293,7 +295,7 @@ Search for specific topics across all sermons.
 ```
 User: Find all teachings about prayer
 User: Search for sermons about spiritual warfare
-User: What has Pastor John taught about faith?
+User: What has Apostle Emmanuel Iren taught about faith?
 ```
 
 **Parameters:**
@@ -304,7 +306,7 @@ User: What has Pastor John taught about faith?
 ```
 Sermon: Sunday Morning Service - Faith and Prayer
 Date: 2024-03-10
-Speaker: Pastor John
+Speaker: Apostle Emmanuel Iren
 URL: https://youtube.com/watch?v=abc123
 Relevant sections:
   - Main Point 2: The Power of Prayer [62:06]: Teaching on consistent prayer
@@ -326,7 +328,7 @@ Relevant sections:
 ## Project Structure
 
 ```
-sermon-mcp/
+kerygma/
 ├── src/
 │   ├── __init__.py
 │   ├── admin.py               # Admin ingestion script (manual)
@@ -446,11 +448,11 @@ RUN_LIVE_TESTS=1 pytest
 ### Example 1: Admin Ingesting a New Sermon
 
 ```bash
-$ python -m src.admin ingest https://www.youtube.com/watch?v=sXwyenjCGVQ --speaker "Pastor John"
+$ python -m src.admin ingest https://www.youtube.com/watch?v=sXwyenjCGVQ --speaker "Apostle Emmanuel Iren"
 
 ============================================================
-Ingesting 1 sermon video(s)
-Speaker: Pastor John
+Kerygma - Ingesting 1 sermon video(s)
+Speaker: Apostle Emmanuel Iren
 ============================================================
 
 INFO:src.admin:[1/1] Processing https://www.youtube.com/watch?v=sXwyenjCGVQ
@@ -472,7 +474,7 @@ User: What does our church teach about prayer?
 
 Claude: Based on the sermon excerpts from our church, prayer is taught as
 a vital spiritual discipline that connects us with God. In the Sunday
-Morning Service from March 10, 2024, Pastor John emphasized that "prayer
+Morning Service from March 10, 2024, Apostle Emmanuel Iren emphasized that "prayer
 is not just talking to God, but listening for His voice" [62:15].
 
 The teaching highlights several key aspects:
@@ -495,7 +497,7 @@ Claude: I found several sermons that discuss faith:
 
 **Sunday Morning Service - Faith and Prayer**
 Date: 2024-03-10
-Speaker: Pastor John
+Speaker: Apostle Emmanuel Iren
 URL: https://youtube.com/watch?v=abc123
 Relevant sections:
 - Main Point 1: Defining Biblical Faith [60:06]: Deep dive into Hebrews 11
@@ -615,3 +617,7 @@ For issues and questions:
 **Status:** Production-ready for church knowledge base deployment
 
 **Use Case:** Church administrators build a sermon knowledge base; church members query teachings via Claude
+
+---
+
+**Kerygma** (κήρυγμα) - From the Greek word for "proclamation," Kerygma makes the preached word searchable and accessible to your congregation.

@@ -1,4 +1,4 @@
-# Church Sermon Knowledge Base MCP - Implementation Status
+# Kerygma - Church Sermon Knowledge Base MCP - Implementation Status
 
 ## Project Overview
 Build an MCP (Model Context Protocol) server that ingests YouTube sermon videos, transcribes them, chunks them semantically, stores them with metadata, and exposes tools for querying church teachings.
@@ -45,7 +45,7 @@ Create a working MCP server that:
 ## 🗂️ Project Structure
 
 ```
-sermon-mcp/
+kerygma/
 ├── src/
 │   ├── __init__.py
 │   ├── admin.py               # ✅ Admin ingestion script (manual)

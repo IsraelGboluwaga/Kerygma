@@ -1,10 +1,12 @@
 import json
 import os
+from unittest.mock import patch
 
 import pytest
 
 from src.chunker import prepare_transcript_for_chunking, validate_chunks
-from src.ingestion import detect_sermon_section, get_video_metadata, get_transcript
+from src.ingestion import detect_sermon_section, get_video_metadata, get_transcript, process_youtube_video, VideoTooLongError
+from src.admin import ingest_videos
 from src.storage import (
     get_chunks_by_sermon_id,
     get_sermon_by_video_id,
@@ -186,6 +188,90 @@ def test_validate_chunks_sorts_by_start():
     result = validate_chunks(chunks)
     assert result[0]["section_name"] == "A"
     assert result[1]["section_name"] == "B"
+
+
+# ── VideoTooLongError / duration-limit tests ───────────────────────────────
+
+
+def _fake_metadata(duration: int) -> dict:
+    return {
+        "video_id": "test123",
+        "title": "Test Video",
+        "date": "2024-01-01",
+        "url": "https://youtube.com/watch?v=test123",
+        "duration": duration,
+        "chapters": [],
+    }
+
+
+def test_process_video_raises_when_too_long(monkeypatch):
+    monkeypatch.setattr("src.ingestion.settings.max_video_duration_seconds", 7200)
+    with patch("src.ingestion.get_video_metadata", return_value=_fake_metadata(7201)):
+        with pytest.raises(VideoTooLongError, match="exceeds 120-min limit"):
+            process_youtube_video("https://youtube.com/watch?v=test123")
+
+
+def test_process_video_passes_at_exact_limit(monkeypatch):
+    monkeypatch.setattr("src.ingestion.settings.max_video_duration_seconds", 7200)
+    with patch("src.ingestion.get_video_metadata", return_value=_fake_metadata(7200)), \
+         patch("src.ingestion.detect_sermon_section", return_value=None), \
+         patch("src.ingestion.get_transcript", return_value=[]):
+        result = process_youtube_video("https://youtube.com/watch?v=test123")
+        assert result["video_id"] == "test123"
+
+
+def test_process_video_passes_below_limit(monkeypatch):
+    monkeypatch.setattr("src.ingestion.settings.max_video_duration_seconds", 7200)
+    with patch("src.ingestion.get_video_metadata", return_value=_fake_metadata(3600)), \
+         patch("src.ingestion.detect_sermon_section", return_value=None), \
+         patch("src.ingestion.get_transcript", return_value=[]):
+        result = process_youtube_video("https://youtube.com/watch?v=test123")
+        assert result["duration"] == 3600
+
+
+def test_process_video_custom_limit_from_env(monkeypatch):
+    monkeypatch.setattr("src.ingestion.settings.max_video_duration_seconds", 3600)
+    with patch("src.ingestion.get_video_metadata", return_value=_fake_metadata(3601)):
+        with pytest.raises(VideoTooLongError, match="exceeds 60-min limit"):
+            process_youtube_video("https://youtube.com/watch?v=test123")
+
+
+def test_ingest_videos_skips_long_video_and_continues():
+    """Skipped videos should not abort the rest of the batch."""
+    urls = [
+        "https://youtube.com/watch?v=long1",
+        "https://youtube.com/watch?v=long2",
+    ]
+    with patch("src.admin.process_youtube_video") as mock_proc:
+        mock_proc.side_effect = VideoTooLongError("'Long Video' is 150 min — exceeds 120-min limit")
+        # Should not raise; both URLs should be attempted
+        ingest_videos(urls)
+        assert mock_proc.call_count == 2
+
+
+def test_ingest_videos_skips_only_long_ones():
+    """Only the over-limit video is skipped; the short one is processed."""
+    short_data = {
+        "video_id": "short1",
+        "title": "Short Sermon",
+        "date": "2024-01-01",
+        "url": "https://youtube.com/watch?v=short1",
+        "speaker": None,
+        "duration": 3600,
+        "transcript": [],
+        "sermon_section": None,
+    }
+    with patch("src.admin.process_youtube_video") as mock_proc, \
+         patch("src.admin.get_sermon_by_video_id", return_value=None), \
+         patch("src.admin.chunk_sermon", return_value=[]), \
+         patch("src.admin.save_sermon", return_value=1), \
+         patch("src.admin.save_chunks"):
+        mock_proc.side_effect = [
+            VideoTooLongError("too long"),
+            short_data,
+        ]
+        ingest_videos(["https://youtube.com/watch?v=long1", "https://youtube.com/watch?v=short1"])
+        assert mock_proc.call_count == 2
 
 
 # ── Live integration tests (require network) ──────────────────────────────

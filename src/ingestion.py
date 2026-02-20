@@ -4,7 +4,13 @@ from datetime import datetime
 import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 
+from .config import settings
+
 logger = logging.getLogger(__name__)
+
+
+class VideoTooLongError(Exception):
+    """Raised when a video exceeds the maximum allowed duration."""
 
 
 def get_video_metadata(url: str) -> dict:
@@ -61,6 +67,15 @@ def get_transcript(video_id: str, section: dict | None = None) -> list[dict]:
 
 def process_youtube_video(url: str, speaker: str | None = None) -> dict:
     metadata = get_video_metadata(url)
+
+    max_duration = settings.max_video_duration_seconds
+    if metadata["duration"] > max_duration:
+        duration_min = metadata["duration"] // 60
+        limit_min = max_duration // 60
+        raise VideoTooLongError(
+            f"{metadata['title']!r} is {duration_min} min — exceeds {limit_min}-min limit"
+        )
+
     sermon_section = detect_sermon_section(metadata["chapters"])
     transcript = get_transcript(metadata["video_id"], sermon_section)
 

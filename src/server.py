@@ -16,7 +16,7 @@ from .utils import format_timestamp
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("sermon-knowledge-base")
+mcp = FastMCP("kerygma")
 
 
 @mcp.tool()

@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str
     db_path: str
+    max_video_duration_seconds: int = 7200
 
 
 settings = Settings()
