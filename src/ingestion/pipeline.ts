@@ -4,14 +4,21 @@ import { URL } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
-import { getSermonByVideoId, saveSermon, saveChunks } from '../db/queries.js'
+import {
+  getSermonByVideoId,
+  saveSermon,
+  insertPartialSermon,
+  completeSermon,
+  saveChunks,
+} from '../db/queries.js'
+import type { TranscriptSegment } from './transcriber.js'
 import { downloadMp3 } from './downloader.js'
 import { transcribeAudio } from './transcriber.js'
 import { chunkSermon } from './chunker.js'
 import { generateEmbedding } from './embedder.js'
 
 export interface IngestRequest {
-  mp3Url: string
+  downloadUrl: string
   webpageUrl?: string
   title: string
   speaker: string
@@ -47,15 +54,67 @@ function defaultTitle(url: string): string {
   }
 }
 
+async function chunkEmbedSave(
+  sermonId: number,
+  title: string,
+  segments: TranscriptSegment[],
+  anthropic: Anthropic
+): Promise<number> {
+  logger.info(`Chunking "${title}" with Claude...`)
+  const chunks = await chunkSermon(segments, anthropic)
+
+  logger.info(`Embedding ${chunks.length} chunk(s) for "${title}"...`)
+  const chunksWithEmbeddings = await Promise.all(
+    chunks.map(async (c) => ({
+      ...c,
+      embedding: await generateEmbedding(c.content),
+    }))
+  )
+
+  saveChunks(
+    sermonId,
+    chunksWithEmbeddings.map((c) => ({
+      section_name: c.section_name,
+      content: c.content,
+      timestamp_start: c.timestamp_start,
+      timestamp_end: c.timestamp_end,
+      topics: c.topics,
+      summary: c.summary,
+      embedding: c.embedding,
+    }))
+  )
+
+  completeSermon(sermonId)
+  return chunks.length
+}
+
 export async function ingestSermon(
   req: IngestRequest,
   anthropic: Anthropic
 ): Promise<IngestResult> {
-  const videoId = makeVideoId(req.mp3Url)
-  const title = req.title || defaultTitle(req.mp3Url)
+  const videoId = makeVideoId(req.downloadUrl)
+  const title = req.title || defaultTitle(req.downloadUrl)
 
-  // Duplicate check
   const existing = getSermonByVideoId(videoId)
+
+  // Resume from chunking if transcription was already saved
+  if (existing && existing.ingestion_status === 'transcribed' && existing.transcription) {
+    logger.info(`Resuming "${title}" — transcription already saved, skipping download`)
+    try {
+      const segments = JSON.parse(existing.transcription) as TranscriptSegment[]
+      const chunkCount = await chunkEmbedSave(existing.id, title, segments, anthropic)
+      return {
+        status: 'ok',
+        message: `Ingested "${title}" — ${chunkCount} chunk(s)`,
+        sermonId: existing.id,
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return { status: 'error', message }
+    }
+  }
+
+  // Already fully ingested
   if (existing) {
     return {
       status: 'duplicate',
@@ -67,15 +126,13 @@ export async function ingestSermon(
   let cleanup: (() => void) | undefined
 
   try {
-    const download = await downloadMp3(req.mp3Url)
+    const download = await downloadMp3(req.downloadUrl)
     cleanup = download.cleanup
-    const filePath = download.filePath
 
-    // Transcribe
     logger.info(`Transcribing "${title}"...`)
-    const { segments, duration } = await transcribeAudio(filePath)
+    const { segments, duration } = await transcribeAudio(download.filePath)
 
-    // Duration check
+    // Duration check before touching the DB
     const maxDuration = config.MAX_AUDIO_DURATION_SECONDS
     if (duration > maxDuration) {
       const durationMin = Math.floor(duration / 60)
@@ -85,47 +142,24 @@ export async function ingestSermon(
       )
     }
 
-    // Chunk with Claude
-    logger.info(`Chunking "${title}" with Claude...`)
-    const chunks = await chunkSermon(segments, anthropic)
-
-    // Generate embeddings — stored for future vector/semantic search (not queried yet)
-    logger.info(`Embedding ${chunks.length} chunk(s) for "${title}"...`)
-    const chunksWithEmbeddings = await Promise.all(
-      chunks.map(async (c) => ({
-        ...c,
-        embedding: await generateEmbedding(c.content),
-      }))
-    )
-
-    // Persist
-    const sermonId = saveSermon({
+    // Save partial record — if chunking/embedding fails, next retry resumes here
+    const sermonId = insertPartialSermon({
       video_id: videoId,
       title,
       date: req.date,
-      url: req.mp3Url,
+      download_url: req.downloadUrl,
       webpage_url: req.webpageUrl,
       speaker: req.speaker,
       duration: Math.round(duration),
       tags: req.tags,
+      transcription: JSON.stringify(segments),
     })
 
-    saveChunks(
-      sermonId,
-      chunksWithEmbeddings.map((c) => ({
-        section_name: c.section_name,
-        content: c.content,
-        timestamp_start: c.timestamp_start,
-        timestamp_end: c.timestamp_end,
-        topics: c.topics,
-        summary: c.summary,
-        embedding: c.embedding,
-      }))
-    )
+    const chunkCount = await chunkEmbedSave(sermonId, title, segments, anthropic)
 
     return {
       status: 'ok',
-      message: `Ingested "${title}" — ${chunks.length} chunk(s)`,
+      message: `Ingested "${title}" — ${chunkCount} chunk(s)`,
       sermonId,
     }
   } catch (err) {

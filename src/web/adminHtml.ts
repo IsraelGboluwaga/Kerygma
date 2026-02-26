@@ -48,10 +48,10 @@ export function adminHtml(): string {
       font-size: 0.9rem; margin-top: 1rem;
       display: none;
     }
-    .status-pending  { background: #fef9c3; color: #854d0e; }
-    .status-running  { background: #dbeafe; color: #1e40af; }
-    .status-completed { background: #dcfce7; color: #166534; }
-    .status-error    { background: #fee2e2; color: #991b1b; }
+    .status-pending { background: #fef9c3; color: #854d0e; }
+    .status-running { background: #dbeafe; color: #1e40af; }
+    .status-done    { background: #dcfce7; color: #166534; }
+    .status-failed  { background: #fee2e2; color: #991b1b; }
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     th { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 2px solid #e5e7eb; color: #555; }
     td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #f0f0f0; }
@@ -59,10 +59,10 @@ export function adminHtml(): string {
       display: inline-block; padding: 0.15rem 0.5rem;
       border-radius: 999px; font-size: 0.75rem; font-weight: 500;
     }
-    .badge-pending   { background: #fef9c3; color: #854d0e; }
-    .badge-running   { background: #dbeafe; color: #1e40af; }
-    .badge-completed { background: #dcfce7; color: #166534; }
-    .badge-error     { background: #fee2e2; color: #991b1b; }
+    .badge-pending { background: #fef9c3; color: #854d0e; }
+    .badge-running { background: #dbeafe; color: #1e40af; }
+    .badge-done    { background: #dcfce7; color: #166534; }
+    .badge-failed  { background: #fee2e2; color: #991b1b; }
     .secret-field { margin-bottom: 1.5rem; }
   </style>
 </head>
@@ -80,8 +80,8 @@ export function adminHtml(): string {
     <h2>New Ingestion</h2>
     <form id="ingest-form">
       <div class="field">
-        <label for="mp3Url">MP3 URL <span style="color:#e11d48">*</span></label>
-        <input type="url" id="mp3Url" name="mp3Url" placeholder="https://example.com/sermon.mp3" required>
+        <label for="downloadUrl">Download URL <span style="color:#e11d48">*</span></label>
+        <input type="url" id="downloadUrl" name="downloadUrl" placeholder="https://example.com/sermon.mp3" required>
       </div>
       <div class="field">
         <label for="webpageUrl">Webpage URL <span style="color:#9ca3af">(optional)</span></label>
@@ -162,15 +162,16 @@ export function adminHtml(): string {
           headers: { 'X-Admin-Secret': getSecret() }
         })
         const job = await res.json()
-        if (job.status === 'completed') {
+        if (job.status === 'done') {
           clearInterval(interval)
           const msg = (job.result && job.result.message) || 'Done'
-          showStatus('Done: ' + msg, 'completed')
+          showStatus('Done: ' + msg, 'done')
           submitBtn.disabled = false
           loadJobs()
-        } else if (job.status === 'error') {
+        } else if (job.status === 'failed') {
           clearInterval(interval)
-          showStatus('Error: ' + (job.error || 'Unknown error'), 'error')
+          const msg = (job.result && job.result.message) || job.error || 'Unknown error'
+          showStatus('Failed: ' + msg, 'failed')
           submitBtn.disabled = false
           loadJobs()
         } else {
@@ -191,7 +192,7 @@ export function adminHtml(): string {
 
     const tagsRaw = document.getElementById('tags').value.trim()
     const body = {
-      mp3Url:     document.getElementById('mp3Url').value.trim(),
+      downloadUrl: document.getElementById('downloadUrl').value.trim(),
       webpageUrl: document.getElementById('webpageUrl').value.trim() || undefined,
       title:      document.getElementById('title').value.trim(),
       speaker:    document.getElementById('speaker').value.trim(),

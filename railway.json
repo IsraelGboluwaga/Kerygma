@@ -1,7 +1,4 @@
 {
-  "build": {
-    "buildCommand": "yarn install --frozen-lockfile && yarn build && yarn nodejs-whisper download"
-  },
   "deploy": {
     "startCommand": "node dist/main.js"
   }

@@ -26,6 +26,7 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 - **Duration limit** — configurable cap to reject overly long files
 - **Speaker disambiguation** — "Apostle" with multiple matches prompts a clarifying list
 - **Nearest-date fallback** — suggests the closest sermon when an exact date has no results
+- **Docker-first** — multi-stage image bundles whisper.cpp, ffmpeg, and the model; no host toolchain needed
 - **Railway/Render ready** — single process, persistent SQLite volume
 
 ---
@@ -77,20 +78,23 @@ kerygma/
 │   │   ├── transcriber.ts         # nodejs-whisper → TranscriptSegment[]
 │   │   ├── chunker.ts             # Claude chunking + validateChunks
 │   │   ├── embedder.ts            # @xenova/transformers singleton
-│   │   └── pipeline.ts            # Orchestrates full ingest
+│   │   └── pipeline.ts            # Orchestrates full ingest (with retry resume)
 │   ├── mcp/
 │   │   └── server.ts              # 4 MCP tool registrations
 │   └── web/
 │       ├── router.ts              # Hono app
-│       └── adminHtml.ts           # Admin form HTML
+│       ├── adminHtml.ts           # Admin form HTML
+│       └── chatHtml.ts            # Streaming chat UI
 ├── tests/
 │   ├── setup.ts                   # Env vars for test context
-│   ├── db.test.ts                 # Storage layer (23 tests)
+│   ├── db.test.ts                 # Storage layer (26 tests)
 │   ├── chunker.test.ts            # Pure unit tests (12 tests)
-│   ├── ingestion.test.ts          # Pipeline tests, mocked (11 tests)
-│   └── queue.test.ts              # Queue behaviour (7 tests)
+│   ├── ingestion.test.ts          # Pipeline tests, mocked (12 tests)
+│   └── queue.test.ts              # Queue behaviour (8 tests)
 ├── data/
 │   └── sermons.db                 # SQLite database (created at runtime)
+├── Dockerfile
+├── .dockerignore
 ├── ARCHITECTURE.md
 ├── mcpConnect.md
 ├── package.json
@@ -105,11 +109,12 @@ kerygma/
 
 ### Prerequisites
 
-- Node.js 20+
-- Yarn
+- Docker
 - Anthropic API key ([console.anthropic.com](https://console.anthropic.com/))
 
-### Setup
+Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg, and the Whisper model download. No host toolchain required.
+
+### Docker (recommended)
 
 1. **Clone the repository**
    ```bash
@@ -117,17 +122,7 @@ kerygma/
    cd kerygma
    ```
 
-2. **Install dependencies**
-   ```bash
-   yarn install
-   ```
-
-3. **Download the Whisper model**
-   ```bash
-   npx nodejs-whisper download
-   ```
-
-4. **Configure environment**
+2. **Configure environment**
    ```bash
    cp .env.example .env
    ```
@@ -138,18 +133,45 @@ kerygma/
    ADMIN_SECRET=your-secret-password
 
    # Optional
-   DB_PATH=./data/sermons.db
+   DB_PATH=/data/sermons.db
    PORT=3000
    MAX_AUDIO_DURATION_SECONDS=7200
    WHISPER_MODEL=base.en
    ```
 
-5. **Run**
+3. **Build the image**
    ```bash
-   yarn dev
+   docker build -t kerygma .
    ```
 
-   The server starts at `http://localhost:3000`.
+   This compiles whisper.cpp and downloads the Whisper model into the image. Takes a few minutes on first build; subsequent code-only rebuilds are fast due to layer caching.
+
+4. **Run**
+   ```bash
+   docker run -p 3000:3000 --env-file .env -v kerygma-data:/data kerygma
+   ```
+
+   The `-v kerygma-data:/data` flag creates a named volume so the SQLite database persists across container restarts. The server starts at `http://localhost:3000`.
+
+To use a larger Whisper model (e.g. `small.en`):
+```bash
+docker build --build-arg WHISPER_MODEL=small.en -t kerygma .
+```
+
+---
+
+### Local Development (without Docker)
+
+Requires: Node 20+, Yarn, cmake, ffmpeg (`brew install cmake ffmpeg` on macOS).
+
+```bash
+yarn install
+npx nodejs-whisper download   # compiles whisper.cpp + downloads model (~142MB)
+cp .env.example .env          # fill in ANTHROPIC_API_KEY + ADMIN_SECRET
+yarn dev
+```
+
+The server starts at `http://localhost:3000`.
 
 ---
 
@@ -160,14 +182,16 @@ kerygma/
 Open `http://localhost:3000/admin` in a browser.
 
 Fill in the form:
-- **MP3 URL** — direct link to the audio file
+- **Download URL** — direct link to the audio file (MP3)
 - **Webpage URL** *(optional)* — the sermon page on the church website
 - **Title** — sermon title
 - **Speaker** — preacher's name
 - **Date** — sermon date
 - **Tags** *(optional)* — comma-separated keywords
 
-Click **Ingest Sermon**. The form polls every 3 seconds and shows the job status until it completes or errors. Multiple sermons can be queued — they process one at a time.
+Click **Ingest Sermon**. The form polls every 3 seconds and shows the job status until it finishes (`done`) or fails (`failed`). Multiple sermons can be queued — they process one at a time.
+
+If a job fails after transcription, re-submitting the same URL will resume from the chunking step — the transcription is preserved in the database, so the download and Whisper step are not repeated.
 
 The `X-Admin-Secret` header is sent automatically using the password you type into the form.
 
@@ -237,35 +261,54 @@ What has Apostle Emmanuel Iren said about healing?
 ## Database Schema
 
 ```sql
-sermons (id, video_id, title, date, url, webpage_url, speaker, duration, tags, created_at)
+sermons (id, video_id, title, date, download_url, webpage_url, speaker, duration, tags,
+         ingestion_status, transcription, created_at)
 chunks  (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
 chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
 ```
 
-`video_id` is `SHA256(mp3Url).slice(0, 16)` — duplicate detection is URL-based.
+`video_id` is `SHA256(downloadUrl).slice(0, 16)` — duplicate detection is URL-based.
+`ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete. Partial records enable retry resume without re-downloading.
 
 ---
 
 ## Development
 
 ```bash
-yarn dev          # run with tsx (hot-ish reload via restarting)
+yarn dev          # run with tsx (needs cmake + ffmpeg + whisper model on host)
 yarn build        # tsc → dist/
 yarn start        # node dist/main.js
-yarn test         # vitest — 53 tests
+yarn test         # vitest — 58 tests
 yarn typecheck    # tsc --noEmit
 ```
+
+For iterating on code without rebuilding the full Docker image, `yarn dev` is faster — but you need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`).
 
 ---
 
 ## Deployment (Railway)
 
+Railway uses the `Dockerfile` for builds.
+
 1. Create a new Railway project from this repo
 2. Add a Volume mounted at `/data`
 3. Set environment variables (see Configuration above), with `DB_PATH=/data/sermons.db`
-4. Railway will use `railway.json` for build and start commands
+4. Push to the connected branch — Railway builds the Docker image automatically
 
-The Whisper model is downloaded during the build step and baked into the layer. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
+The Whisper model is downloaded during the Docker build step and baked into the image layer. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
+
+### Layer caching on rebuilds
+
+Docker layer order is optimised so code-only changes are fast:
+
+```
+apt-get install cmake...    ← cached forever
+COPY package.json yarn.lock ← cached until deps change
+RUN yarn install            ← cached until yarn.lock changes (compiles whisper.cpp + sqlite)
+RUN wget whisper model      ← cached until yarn.lock changes
+COPY . .                    ← invalidated on every code change
+RUN yarn build              ← only this re-runs for code changes (~seconds)
+```
 
 ---
 

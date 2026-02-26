@@ -17,11 +17,13 @@ export interface SermonRow {
   video_id: string
   title: string
   date: string
-  url: string
+  download_url: string
   webpage_url: string | null
   speaker: string | null
   duration: number | null
   tags: string | null
+  ingestion_status: string
+  transcription: string | null
   created_at: string
 }
 
@@ -40,7 +42,8 @@ export interface ChunkRow {
 export interface ChunkWithSermon extends ChunkRow {
   sermon_title: string
   date: string
-  url: string
+  download_url: string
+  webpage_url: string | null
   speaker: string | null
 }
 
@@ -48,11 +51,16 @@ export interface SaveSermonInput {
   video_id: string
   title: string
   date: string
-  url: string
+  download_url: string
   webpage_url?: string
   speaker?: string
   duration?: number
   tags?: string[]
+}
+
+export interface InsertPartialSermonInput extends SaveSermonInput {
+  duration: number          // required — known after transcription
+  transcription: string     // JSON-encoded TranscriptSegment[]
 }
 
 export interface SaveChunkInput {
@@ -68,20 +76,48 @@ export interface SaveChunkInput {
 export function saveSermon(data: SaveSermonInput): number {
   const result = getDb()
     .prepare(
-      `INSERT INTO sermons (video_id, title, date, url, webpage_url, speaker, duration, tags)
-       VALUES (@video_id, @title, @date, @url, @webpage_url, @speaker, @duration, @tags)`
+      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, ingestion_status)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, 'done')`
     )
     .run({
       video_id: data.video_id,
       title: data.title,
       date: data.date,
-      url: data.url,
+      download_url: data.download_url,
       webpage_url: data.webpage_url ?? null,
       speaker: data.speaker ?? null,
       duration: data.duration ?? null,
       tags: data.tags ? JSON.stringify(data.tags) : null,
     })
   return result.lastInsertRowid as number
+}
+
+export function insertPartialSermon(data: InsertPartialSermonInput): number {
+  const result = getDb()
+    .prepare(
+      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, ingestion_status, transcription)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, 'transcribed', @transcription)`
+    )
+    .run({
+      video_id: data.video_id,
+      title: data.title,
+      date: data.date,
+      download_url: data.download_url,
+      webpage_url: data.webpage_url ?? null,
+      speaker: data.speaker ?? null,
+      duration: data.duration,
+      tags: data.tags ? JSON.stringify(data.tags) : null,
+      transcription: data.transcription,
+    })
+  return result.lastInsertRowid as number
+}
+
+export function completeSermon(id: number): void {
+  getDb()
+    .prepare(
+      `UPDATE sermons SET ingestion_status = 'done', transcription = NULL WHERE id = ?`
+    )
+    .run(id)
 }
 
 export function saveChunks(sermonId: number, chunks: SaveChunkInput[]): void {
@@ -121,7 +157,7 @@ export function getSermonByVideoId(videoId: string): SermonRow | null {
 
 export function getSermonsByDate(date: string): SermonRow[] {
   return getDb()
-    .prepare(`SELECT * FROM sermons WHERE date LIKE ? ORDER BY date DESC`)
+    .prepare(`SELECT * FROM sermons WHERE date LIKE ? AND ingestion_status = 'done' ORDER BY date DESC`)
     .all(`${date}%`) as SermonRow[]
 }
 
@@ -134,7 +170,7 @@ export function getChunksBySermonId(sermonId: number): ChunkRow[] {
 export function searchChunks(query: string, limit = 10): ChunkWithSermon[] {
   return getDb()
     .prepare(
-      `SELECT c.*, s.title AS sermon_title, s.date, s.url, s.speaker
+      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker
        FROM chunks_fts fts
        JOIN chunks c ON c.id = fts.rowid
        JOIN sermons s ON s.id = c.sermon_id
@@ -147,7 +183,7 @@ export function searchChunks(query: string, limit = 10): ChunkWithSermon[] {
 
 export function listSermons(limit = 20): SermonRow[] {
   return getDb()
-    .prepare(`SELECT * FROM sermons ORDER BY date DESC LIMIT ?`)
+    .prepare(`SELECT * FROM sermons WHERE ingestion_status = 'done' ORDER BY date DESC LIMIT ?`)
     .all(limit) as SermonRow[]
 }
 
@@ -158,7 +194,7 @@ export function getNearestSermonByDate(date: string): SermonRow | null {
   return (
     (getDb()
       .prepare(
-        `SELECT * FROM sermons ORDER BY ABS(julianday(date) - julianday(?)) LIMIT 1`
+        `SELECT * FROM sermons WHERE ingestion_status = 'done' ORDER BY ABS(julianday(date) - julianday(?)) LIMIT 1`
       )
       .get(padded) as SermonRow | undefined) ?? null
   )
@@ -168,7 +204,7 @@ export function getSpeakersMatchingFilter(filter: string): string[] {
   const rows = getDb()
     .prepare(
       `SELECT DISTINCT speaker FROM sermons
-       WHERE speaker IS NOT NULL AND LOWER(speaker) LIKE LOWER(?)
+       WHERE speaker IS NOT NULL AND ingestion_status = 'done' AND LOWER(speaker) LIKE LOWER(?)
        ORDER BY speaker`
     )
     .all(`%${filter}%`) as { speaker: string }[]

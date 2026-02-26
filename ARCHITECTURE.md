@@ -61,6 +61,8 @@ All other modules import this singleton — no connection pooling needed for SQL
 Typed functions for every DB operation:
 - `saveSermon(data)` → `number` (sermon id)
 - `saveChunks(sermonId, chunks[])` — uses `db.transaction()` for atomicity
+- `insertPartialSermon(data)` → `number` — saves a partially-ingested sermon with `ingestion_status='transcribed'` and raw transcription JSON
+- `completeSermon(id)` — sets `ingestion_status='done'`, clears `transcription`
 - `getSermonByVideoId(id)` → `SermonRow | null`
 - `getSermonsByDate(date)` → `SermonRow[]`
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
@@ -95,15 +97,20 @@ Stored in `chunks.embedding BLOB` for future vector search — not queried yet.
 ### `src/ingestion/pipeline.ts`
 Orchestrates the full ingestion flow for one sermon:
 ```
-hash URL → check duplicate → download → transcribe → check duration
-→ chunk → embed each chunk → save to DB → cleanup
+hash URL → check existing record
+  → if ingestion_status='transcribed': resume from stored transcription (skip download)
+  → if ingestion_status='done': return duplicate
+  → else: download → transcribe → insertPartialSermon (saves transcription to DB)
+            → chunk → embed each chunk → completeSermon (sets status='done', clears transcription)
+            → cleanup temp file
 ```
 `try/finally` guarantees the temp file is always deleted.
+The partial-record step means a retry after a chunking failure skips re-download and re-transcription.
 Returns `{ status: 'ok' | 'duplicate' | 'too_long' | 'error', message, sermonId? }`.
 
 Input:
 ```ts
-{ mp3Url, webpageUrl?, title, speaker, date, tags? }
+{ downloadUrl, webpageUrl?, title, speaker, date, tags? }
 ```
 
 ### `src/queue.ts`
@@ -156,14 +163,19 @@ Admin submits form
 
 Meanwhile, in background:
     pipeline.ingestSermon(req)
-        → downloader.download(mp3Url)    temp file
-        → transcriber.transcribe(file)   segments + duration
-        → duration > MAX → throw AudioTooLongError
-        → chunker.chunkSermon(data)      Claude API call
-        → embedder.embed(chunk.content)  for each chunk
-        → queries.saveSermon + saveChunks
-        → cleanup()                      delete temp file
-    → job.status = 'completed' | 'error'
+        → hash downloadUrl → check for existing record
+        → if ingestion_status='transcribed':
+              parse stored transcription → skip to chunking
+          else:
+              downloader.download(downloadUrl)  temp file
+              transcriber.transcribe(file)      segments + duration
+              duration > MAX → return { status: 'too_long' }
+              queries.insertPartialSermon()     saves transcription to DB
+        → chunker.chunkSermon(data)            Claude API call
+        → embedder.embed(chunk.content)        for each chunk
+        → queries.saveChunks + completeSermon  write chunks, clear transcription
+        → cleanup()                            delete temp file
+    → job.status = 'done' | 'failed'
 ```
 
 ## Data Flow: MCP Query
@@ -192,16 +204,18 @@ e.g. ask_church("What was taught about faith?")
 ```sql
 -- One row per MP3
 CREATE TABLE sermons (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    video_id    TEXT UNIQUE NOT NULL,   -- SHA256(url)[:16]
-    title       TEXT NOT NULL,
-    date        TEXT NOT NULL,          -- YYYY-MM-DD
-    url         TEXT NOT NULL,          -- original MP3 URL
-    webpage_url TEXT,                   -- optional source page
-    speaker     TEXT,
-    duration    INTEGER,                -- seconds
-    tags        TEXT,                   -- JSON array
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id         TEXT UNIQUE NOT NULL,  -- SHA256(downloadUrl)[:16]
+    title            TEXT NOT NULL,
+    date             TEXT NOT NULL,         -- YYYY-MM-DD
+    download_url     TEXT NOT NULL,         -- original MP3 URL
+    webpage_url      TEXT,                  -- optional source page
+    speaker          TEXT,
+    duration         INTEGER,               -- seconds
+    tags             TEXT,                  -- JSON array
+    ingestion_status TEXT NOT NULL DEFAULT 'done',  -- 'transcribed' | 'done'
+    transcription    TEXT,                  -- raw JSON, cleared after chunking
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Many rows per sermon
@@ -222,4 +236,33 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(
     content, summary, topics,
     content_rowid='id', content='chunks'
 );
+```
+
+Migration shims in `schema.ts` handle existing databases: `ALTER TABLE` statements run only when a column is absent, so an old DB survives an upgrade without data loss.
+
+---
+
+## Docker Build
+
+The image uses a two-stage build to keep the runtime image small:
+
+```
+Stage 1 — builder (node:20, Debian Bookworm)
+    apt-get install cmake build-essential python3 wget
+    yarn install --frozen-lockfile   ← compiles whisper.cpp + better-sqlite3
+    wget ggml-base.en.bin            ← bakes Whisper model into image layer
+    yarn build                       ← tsc → dist/
+
+Stage 2 — runtime (node:20-slim, same Debian Bookworm)
+    apt-get install ffmpeg           ← needed at runtime for MP3→WAV conversion
+    COPY dist/ node_modules/ package.json from builder
+```
+
+Both stages use the same Debian Bookworm base so compiled `.node` binaries are portable between them (same glibc ABI).
+
+**Layer caching:** `apt-get` and `yarn install` layers are cached until `yarn.lock` changes. Code changes only invalidate the final `COPY . .` + `yarn build` layers, making rebuilds fast.
+
+To use a different Whisper model at build time:
+```bash
+docker build --build-arg WHISPER_MODEL=small.en -t kerygma .
 ```

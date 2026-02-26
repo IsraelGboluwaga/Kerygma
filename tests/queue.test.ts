@@ -24,28 +24,37 @@ describe('queue', () => {
     await new Promise((r) => setTimeout(r, 80))
   })
 
-  it('job reaches completed status after the fn resolves', async () => {
+  it('job reaches done status after the fn resolves', async () => {
     const { enqueue, getJob } = await import('../src/queue.js')
     const id = enqueue(() => Promise.resolve('done'))
 
     await new Promise((r) => setTimeout(r, 50))
 
     const job = getJob(id)
-    expect(job!.status).toBe('completed')
+    expect(job!.status).toBe('done')
     expect(job!.result).toBe('done')
     expect(job!.completedAt).toBeInstanceOf(Date)
   })
 
-  it('job reaches error status when fn rejects, without crashing the queue', async () => {
+  it('job reaches failed status when fn rejects, without crashing the queue', async () => {
     const { enqueue, getJob } = await import('../src/queue.js')
     const badId = enqueue(() => Promise.reject(new Error('boom')))
     const goodId = enqueue(() => Promise.resolve('after error'))
 
     await new Promise((r) => setTimeout(r, 80))
 
-    expect(getJob(badId)!.status).toBe('error')
+    expect(getJob(badId)!.status).toBe('failed')
     expect(getJob(badId)!.error).toBe('boom')
-    expect(getJob(goodId)!.status).toBe('completed')
+    expect(getJob(goodId)!.status).toBe('done')
+  })
+
+  it('job reaches failed status when fn returns a pipeline error result', async () => {
+    const { enqueue, getJob } = await import('../src/queue.js')
+    const id = enqueue(() => Promise.resolve({ status: 'error', message: 'something broke' }))
+
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(getJob(id)!.status).toBe('failed')
   })
 
   it('jobs run sequentially, not concurrently', async () => {

@@ -3,16 +3,18 @@ import type Database from 'better-sqlite3'
 export function initDb(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sermons (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      video_id    TEXT UNIQUE NOT NULL,
-      title       TEXT NOT NULL,
-      date        TEXT NOT NULL,
-      url         TEXT NOT NULL,
-      webpage_url TEXT,
-      speaker     TEXT,
-      duration    INTEGER,
-      tags        TEXT,
-      created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id         TEXT UNIQUE NOT NULL,
+      title            TEXT NOT NULL,
+      date             TEXT NOT NULL,
+      download_url     TEXT NOT NULL,
+      webpage_url      TEXT,
+      speaker          TEXT,
+      duration         INTEGER,
+      tags             TEXT,
+      ingestion_status TEXT NOT NULL DEFAULT 'done',
+      transcription    TEXT,
+      created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS chunks (
@@ -68,6 +70,17 @@ export function initDb(db: Database.Database): void {
   }
   if (!sermonColNames.has('tags')) {
     db.exec(`ALTER TABLE sermons ADD COLUMN tags TEXT`)
+  }
+  // Rename url → download_url (SQLite 3.25+ supports RENAME COLUMN)
+  if (sermonColNames.has('url') && !sermonColNames.has('download_url')) {
+    db.exec(`ALTER TABLE sermons RENAME COLUMN url TO download_url`)
+  }
+  if (!sermonColNames.has('ingestion_status')) {
+    // Existing rows are fully ingested, so default them to 'done'
+    db.exec(`ALTER TABLE sermons ADD COLUMN ingestion_status TEXT NOT NULL DEFAULT 'done'`)
+  }
+  if (!sermonColNames.has('transcription')) {
+    db.exec(`ALTER TABLE sermons ADD COLUMN transcription TEXT`)
   }
 
   const existingChunkCols = db

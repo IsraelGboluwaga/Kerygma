@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { initDatabase } from '../src/db/connection.js'
 import {
   saveSermon,
+  insertPartialSermon,
+  completeSermon,
   saveChunks,
   getSermonByVideoId,
   getSermonsByDate,
@@ -24,7 +26,7 @@ function sampleSermon(overrides: Partial<SaveSermonInput> = {}): SaveSermonInput
     video_id: 'abc123def456abcd',
     title: 'Sunday Service',
     date: '2024-03-10',
-    url: 'https://example.com/sermon.mp3',
+    download_url: 'https://example.com/sermon.mp3',
     speaker: 'Pastor Test',
     duration: 3600,
     ...overrides,
@@ -194,6 +196,42 @@ describe('getSpeakersMatchingFilter', () => {
 
   it('returns empty array when no speaker matches', () => {
     expect(getSpeakersMatchingFilter('Bishop')).toHaveLength(0)
+  })
+})
+
+describe('insertPartialSermon / completeSermon', () => {
+  it('partial sermon is not returned by listSermons until completed', () => {
+    insertPartialSermon({
+      ...sampleSermon(),
+      duration: 3600,
+      transcription: '[]',
+    })
+    expect(listSermons(10)).toHaveLength(0)
+  })
+
+  it('completeSermon makes it visible and clears transcription', () => {
+    const id = insertPartialSermon({
+      ...sampleSermon(),
+      duration: 3600,
+      transcription: '[{"text":"test","start":0,"duration":1}]',
+    })
+    completeSermon(id)
+    const rows = listSermons(10)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].ingestion_status).toBe('done')
+    expect(rows[0].transcription).toBeNull()
+  })
+
+  it('partial record is retrievable by video_id for retry', () => {
+    insertPartialSermon({
+      ...sampleSermon(),
+      duration: 3600,
+      transcription: '[{"text":"test","start":0,"duration":1}]',
+    })
+    const row = getSermonByVideoId('abc123def456abcd')
+    expect(row).not.toBeNull()
+    expect(row!.ingestion_status).toBe('transcribed')
+    expect(row!.transcription).not.toBeNull()
   })
 })
 

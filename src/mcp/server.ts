@@ -105,11 +105,13 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   })
 
   // ── Tool 1: list_sermons ───────────────────────────────────────────────
+  // @ts-ignore — TS2589: MCP SDK Zod schema generics exceed instantiation depth limit
   server.tool(
     'list_sermons',
     'List recently indexed sermons.',
     { limit: z.number().int().positive().default(20).describe('Max sermons to return') },
-    async ({ limit }) => {
+    // @ts-ignore — TS2589: handler return type inference too deep
+    async ({ limit }: { limit: number }) => {
       const rows = listSermons(limit)
 
       if (rows.length === 0) {
@@ -126,7 +128,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
       const text = rows
         .map(
           (r) =>
-            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}\n  URL: ${r.url}`
+            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}${r.webpage_url ? `\n  URL: ${r.webpage_url}` : ''}`
         )
         .join('\n\n')
 
@@ -135,6 +137,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   )
 
   // ── Tool 2: ask_church ─────────────────────────────────────────────────
+  // @ts-ignore — TS2589: MCP SDK Zod schema generics exceed instantiation depth limit
   server.tool(
     'ask_church',
     'Answer a specific question using teachings from indexed sermons. Supports filtering by date and/or speaker.',
@@ -149,7 +152,8 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
         .optional()
         .describe('Optional speaker name or partial name to filter by'),
     },
-    async ({ question, date_filter, speaker_filter }) => {
+    // @ts-ignore — TS2589: handler return type inference too deep
+    async ({ question, date_filter, speaker_filter }: { question: string; date_filter?: string; speaker_filter?: string }) => {
       let resolvedSpeaker: string | undefined
       if (speaker_filter) {
         const resolution = resolveSpeaker(speaker_filter)
@@ -222,7 +226,7 @@ If the excerpts don't contain enough information to answer, say so.`,
         .optional()
         .describe('Optional speaker name or partial name'),
     },
-    async ({ date, speaker }) => {
+    async ({ date, speaker }: { date: string; speaker?: string }) => {
       let resolvedSpeaker: string | undefined
       if (speaker) {
         const resolution = resolveSpeaker(speaker)
@@ -275,7 +279,7 @@ Cite the sermon title, date, and relevant timestamps.`,
         .optional()
         .describe('Optional speaker name to filter by'),
     },
-    async ({ topic, speaker_filter }) => {
+    async ({ topic, speaker_filter }: { topic: string; speaker_filter?: string }) => {
       let resolvedSpeaker: string | undefined
       if (speaker_filter) {
         const resolution = resolveSpeaker(speaker_filter)
@@ -318,7 +322,7 @@ Cite the sermon title, date, and relevant timestamps.`,
             `Sermon: ${sermonTitle}\n` +
             `Date: ${first.date}\n` +
             `Speaker: ${first.speaker ?? 'Unknown'}\n` +
-            `URL: ${first.url}\n` +
+            (first.webpage_url ? `URL: ${first.webpage_url}\n` : '') +
             `Relevant sections:\n${sections}`
           )
         })

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
-// @ts-expect-error — nodejs-whisper has no type declarations
-import nodewhisper from 'nodejs-whisper'
+// nodejs-whisper exposes a named export, not a default export
+import { nodewhisper as whisper } from 'nodejs-whisper'
 import { config } from '../config.js'
 
 export interface TranscriptSegment {
@@ -25,7 +25,7 @@ interface WhisperOutput {
 }
 
 export async function transcribeAudio(filePath: string): Promise<TranscribeResult> {
-  await nodewhisper(filePath, {
+  await whisper(filePath, {
     modelName: config.WHISPER_MODEL,
     autoDownloadModelName: config.WHISPER_MODEL,
     removeWavFileAfterTranscription: false,

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { logger } from './logger.js'
 
-export type JobStatus = 'pending' | 'running' | 'completed' | 'error'
+export type JobStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface Job {
   id: string
@@ -47,11 +47,25 @@ async function drain(): Promise<void> {
     logger.info(`Job ${id} started`)
 
     try {
-      job.result = await fn()
-      job.status = 'completed'
-      logger.info(`Job ${id} completed`)
+      const result = await fn()
+      job.result = result
+      // If the pipeline returned a structured failure, surface it as failed
+      if (
+        result !== null &&
+        typeof result === 'object' &&
+        'status' in result &&
+        ((result as { status: unknown }).status === 'error' ||
+          (result as { status: unknown }).status === 'too_long')
+      ) {
+        const failMsg = (result as { message?: unknown }).message
+        job.status = 'failed'
+        logger.warn(`Job ${id} failed — ${failMsg ?? (result as { status: unknown }).status}`)
+      } else {
+        job.status = 'done'
+        logger.info(`Job ${id} done`)
+      }
     } catch (err) {
-      job.status = 'error'
+      job.status = 'failed'
       job.error = err instanceof Error ? err.message : String(err)
       logger.error(`Job ${id} failed: ${job.error}`)
     } finally {

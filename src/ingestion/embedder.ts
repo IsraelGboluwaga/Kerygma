@@ -1,4 +1,3 @@
-// @ts-expect-error — @xenova/transformers has no bundled types
 import { pipeline as transformersPipeline } from '@xenova/transformers'
 
 type EmbeddingPipeline = (

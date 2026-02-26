@@ -1,5 +1,4 @@
 import http from 'node:http'
-// @ts-expect-error — getRequestListener is exported but not declared in older type stubs
 import { getRequestListener } from '@hono/node-server'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import Anthropic from '@anthropic-ai/sdk'

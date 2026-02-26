@@ -37,7 +37,7 @@ const mockChunk = vi.mocked(chunkSermon)
 const fakeAnthropicClient = {} as Anthropic
 
 const baseRequest: IngestRequest = {
-  mp3Url: 'https://example.com/sermon.mp3',
+  downloadUrl: 'https://example.com/sermon.mp3',
   title: 'Sunday Service',
   speaker: 'Pastor Test',
   date: '2024-03-10',
@@ -155,6 +155,22 @@ describe('ingestSermon — error paths', () => {
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('error')
     expect(cleanup).toHaveBeenCalledOnce()
+  })
+})
+
+describe('ingestSermon — retry resume', () => {
+  it('resumes from chunking without re-downloading when transcription is saved', async () => {
+    // First attempt: chunking fails after transcription
+    mockChunk.mockRejectedValueOnce(new Error('Claude API error'))
+    const first = await ingestSermon(baseRequest, fakeAnthropicClient)
+    expect(first.status).toBe('error')
+    expect(mockDownload).toHaveBeenCalledTimes(1)
+
+    // Second attempt: chunking succeeds — no re-download
+    mockChunk.mockResolvedValueOnce(fakeChunks)
+    const second = await ingestSermon(baseRequest, fakeAnthropicClient)
+    expect(second.status).toBe('ok')
+    expect(mockDownload).toHaveBeenCalledTimes(1) // still only once
   })
 })
 
