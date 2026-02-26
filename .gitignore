@@ -1,24 +1,14 @@
 # Environment variables
 .env
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+# Dependencies
+node_modules/
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
+# Build output
+dist/
 
-# Database (entire data directory)
+# Database
 data/
-
-# Virtual environment
-venv/
-env/
 
 # IDEs
 .vscode/
