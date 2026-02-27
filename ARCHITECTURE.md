@@ -45,6 +45,8 @@ McpServer (4 read-only tools)
 Validates `process.env` with Zod on startup. If a required variable is missing, the
 process crashes with a clear error before doing anything else. Exports a frozen singleton.
 
+Key variables: `ANTHROPIC_API_KEY`, `ADMIN_SECRET`, `MINISTRY_NAME` (used in UI titles and AI system prompts), `WHISPER_MODEL` (must match the model baked into the Docker image).
+
 ### `src/db/schema.ts`
 Defines the SQLite DDL:
 - `sermons` table — one row per ingested MP3
@@ -78,7 +80,9 @@ Uses `AbortSignal.timeout(5 * 60 * 1000)` to cap download time.
 
 ### `src/ingestion/transcriber.ts`
 Calls `nodejs-whisper` (Node bindings for whisper.cpp) on the temp file.
-Reads the `.json` sidecar whisper writes, maps timestamps from ms → seconds.
+nodejs-whisper converts the MP3 to WAV first, then runs `whisper-cli` on the WAV.
+whisper-cli writes the sidecar as `<file>.wav.json` (not `<file>.json`).
+The transcriber reads that path, maps timestamps from ms → seconds, then deletes the sidecar and WAV.
 Returns `{ segments: TranscriptSegment[], duration: number }`.
 
 ### `src/ingestion/chunker.ts`
@@ -110,8 +114,9 @@ Returns `{ status: 'ok' | 'duplicate' | 'too_long' | 'error', message, sermonId?
 
 Input:
 ```ts
-{ downloadUrl, webpageUrl?, title, speaker, date, tags? }
+{ downloadUrl, webpageUrl?, title, speaker, date, series?, tags? }
 ```
+`series` is stored as `${series}-${year}` (e.g. `Faith Foundations-2024`). Speaker is required.
 
 ### `src/queue.ts`
 In-process FIFO queue. One `Map<string, Job>` + one string array of IDs.
@@ -210,7 +215,8 @@ CREATE TABLE sermons (
     date             TEXT NOT NULL,         -- YYYY-MM-DD
     download_url     TEXT NOT NULL,         -- original MP3 URL
     webpage_url      TEXT,                  -- optional source page
-    speaker          TEXT,
+    speaker          TEXT NOT NULL,         -- required
+    series           TEXT,                  -- e.g. "Faith Foundations-2024"
     duration         INTEGER,               -- seconds
     tags             TEXT,                  -- JSON array
     ingestion_status TEXT NOT NULL DEFAULT 'done',  -- 'transcribed' | 'done'
@@ -249,9 +255,12 @@ The image uses a two-stage build to keep the runtime image small:
 ```
 Stage 1 — builder (node:20, Debian Bookworm)
     apt-get install cmake build-essential python3 wget
-    yarn install --frozen-lockfile   ← compiles whisper.cpp + better-sqlite3
-    wget ggml-base.en.bin            ← bakes Whisper model into image layer
-    yarn build                       ← tsc → dist/
+    yarn install --frozen-lockfile          ← compiles better-sqlite3
+    cmake -DGGML_NATIVE=OFF ...             ← compiles whisper-cli (native CPU
+                                               detection disabled for Docker compat)
+    wget ggml-small.en.bin                  ← bakes Whisper model into image layer
+    NODE_OPTIONS=--max-old-space-size=4096  ← tsc needs >2GB heap
+    yarn build                              ← tsc → dist/
 
 Stage 2 — runtime (node:20-slim, same Debian Bookworm)
     apt-get install ffmpeg           ← needed at runtime for MP3→WAV conversion

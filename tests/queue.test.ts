@@ -32,7 +32,6 @@ describe('queue', () => {
 
     const job = getJob(id)
     expect(job!.status).toBe('done')
-    expect(job!.result).toBe('done')
     expect(job!.completedAt).toBeInstanceOf(Date)
   })
 

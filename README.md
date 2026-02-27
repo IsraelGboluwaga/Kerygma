@@ -185,7 +185,8 @@ Fill in the form:
 - **Download URL** — direct link to the audio file (MP3)
 - **Webpage URL** *(optional)* — the sermon page on the church website
 - **Title** — sermon title
-- **Speaker** — preacher's name
+- **Series** *(optional)* — sermon series name; stored as `Series Name-YYYY`
+- **Speaker** — preacher's name (required)
 - **Date** — sermon date
 - **Tags** *(optional)* — comma-separated keywords
 
@@ -250,10 +251,11 @@ What has Apostle Emmanuel Iren said about healing?
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
+| `MINISTRY_NAME` | Yes | `the church` | Ministry name shown in the UI and AI prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
-| `WHISPER_MODEL` | No | `base.en` | Whisper model name |
+| `WHISPER_MODEL` | No | `small.en` | Whisper model name |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
 
 ---
@@ -261,13 +263,14 @@ What has Apostle Emmanuel Iren said about healing?
 ## Database Schema
 
 ```sql
-sermons (id, video_id, title, date, download_url, webpage_url, speaker, duration, tags,
-         ingestion_status, transcription, created_at)
+sermons (id, video_id, title, date, download_url, webpage_url, speaker, series,
+         duration, tags, ingestion_status, transcription, created_at)
 chunks  (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
 chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
 ```
 
 `video_id` is `SHA256(downloadUrl).slice(0, 16)` — duplicate detection is URL-based.
+`series` is stored as `Series Name-YYYY` (e.g. `Faith Foundations-2024`), derived from the series input and the sermon date.
 `ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete. Partial records enable retry resume without re-downloading.
 
 ---

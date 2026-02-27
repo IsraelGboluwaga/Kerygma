@@ -1,10 +1,13 @@
+import { config } from '../config.js'
+
 export function chatHtml(): string {
+  const ministry = config.MINISTRY_NAME
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kerygma Chat</title>
+  <title>${ministry}</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -203,8 +206,8 @@ export function chatHtml(): string {
 
 <header>
   <div>
-    <h1>Kerygma Chat</h1>
-    <div class="subtitle">Ask questions about church sermons</div>
+    <h1>${ministry}</h1>
+    <div class="subtitle">Ask questions about our sermons</div>
   </div>
   <button class="new-btn" id="new-btn">New conversation</button>
 </header>

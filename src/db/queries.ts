@@ -22,6 +22,7 @@ export interface SermonRow {
   speaker: string | null
   duration: number | null
   tags: string | null
+  series: string | null
   ingestion_status: string
   transcription: string | null
   created_at: string
@@ -45,6 +46,7 @@ export interface ChunkWithSermon extends ChunkRow {
   download_url: string
   webpage_url: string | null
   speaker: string | null
+  series: string | null
 }
 
 export interface SaveSermonInput {
@@ -56,6 +58,7 @@ export interface SaveSermonInput {
   speaker?: string
   duration?: number
   tags?: string[]
+  series?: string
 }
 
 export interface InsertPartialSermonInput extends SaveSermonInput {
@@ -76,8 +79,8 @@ export interface SaveChunkInput {
 export function saveSermon(data: SaveSermonInput): number {
   const result = getDb()
     .prepare(
-      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, ingestion_status)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, 'done')`
+      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, ingestion_status)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, 'done')`
     )
     .run({
       video_id: data.video_id,
@@ -88,6 +91,7 @@ export function saveSermon(data: SaveSermonInput): number {
       speaker: data.speaker ?? null,
       duration: data.duration ?? null,
       tags: data.tags ? JSON.stringify(data.tags) : null,
+      series: data.series ?? null,
     })
   return result.lastInsertRowid as number
 }
@@ -95,8 +99,8 @@ export function saveSermon(data: SaveSermonInput): number {
 export function insertPartialSermon(data: InsertPartialSermonInput): number {
   const result = getDb()
     .prepare(
-      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, ingestion_status, transcription)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, 'transcribed', @transcription)`
+      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, ingestion_status, transcription)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, 'transcribed', @transcription)`
     )
     .run({
       video_id: data.video_id,
@@ -107,6 +111,7 @@ export function insertPartialSermon(data: InsertPartialSermonInput): number {
       speaker: data.speaker ?? null,
       duration: data.duration,
       tags: data.tags ? JSON.stringify(data.tags) : null,
+      series: data.series ?? null,
       transcription: data.transcription,
     })
   return result.lastInsertRowid as number
@@ -170,7 +175,7 @@ export function getChunksBySermonId(sermonId: number): ChunkRow[] {
 export function searchChunks(query: string, limit = 10): ChunkWithSermon[] {
   return getDb()
     .prepare(
-      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker
+      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker, s.series
        FROM chunks_fts fts
        JOIN chunks c ON c.id = fts.rowid
        JOIN sermons s ON s.id = c.sermon_id
@@ -198,6 +203,76 @@ export function getNearestSermonByDate(date: string): SermonRow | null {
       )
       .get(padded) as SermonRow | undefined) ?? null
   )
+}
+
+// ── Job persistence ─────────────────────────────────────────────────────────
+
+export interface JobRow {
+  id: string
+  title: string | null
+  download_url: string | null
+  status: string
+  message: string | null
+  error: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+}
+
+export function upsertJob(job: {
+  id: string
+  title?: string
+  download_url?: string
+  status: string
+  message?: string
+  error?: string
+  createdAt: Date
+  startedAt?: Date
+  completedAt?: Date
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO jobs (id, title, download_url, status, message, error, created_at, started_at, completed_at)
+       VALUES (@id, @title, @download_url, @status, @message, @error, @created_at, @started_at, @completed_at)
+       ON CONFLICT(id) DO UPDATE SET
+         status       = excluded.status,
+         message      = excluded.message,
+         error        = excluded.error,
+         started_at   = excluded.started_at,
+         completed_at = excluded.completed_at`
+    )
+    .run({
+      id: job.id,
+      title: job.title ?? null,
+      download_url: job.download_url ?? null,
+      status: job.status,
+      message: job.message ?? null,
+      error: job.error ?? null,
+      created_at: job.createdAt.toISOString(),
+      started_at: job.startedAt?.toISOString() ?? null,
+      completed_at: job.completedAt?.toISOString() ?? null,
+    })
+}
+
+export function getJobRow(id: string): JobRow | null {
+  return (
+    (getDb().prepare(`SELECT * FROM jobs WHERE id = ?`).get(id) as JobRow | undefined) ?? null
+  )
+}
+
+export function listRecentJobRows(limit = 50): JobRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?`)
+    .all(limit) as JobRow[]
+}
+
+export function failStaleJobs(): void {
+  getDb()
+    .prepare(
+      `UPDATE jobs SET status = 'failed', error = 'Server restarted while job was running'
+       WHERE status IN ('pending', 'running')`
+    )
+    .run()
 }
 
 export function getSpeakersMatchingFilter(filter: string): string[] {

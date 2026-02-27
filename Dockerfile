@@ -11,19 +11,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install dependencies first — compiles native addons (better-sqlite3, whisper.cpp)
+# Install dependencies first — compiles native addons (better-sqlite3)
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile
 
+# Explicitly compile whisper.cpp — postinstall alone isn't reliable in Docker
+RUN cd node_modules/nodejs-whisper/cpp/whisper.cpp && \
+    cmake -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DGGML_CUDA=OFF \
+          -DGGML_METAL=OFF \
+          -DGGML_NATIVE=OFF \
+    && cmake --build build -j2
+
 # Download whisper model into the package's models directory
 # Override at build time with: docker build --build-arg WHISPER_MODEL=small.en
-ARG WHISPER_MODEL=base.en
+ARG WHISPER_MODEL=small.en
 RUN wget -q -O node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-${WHISPER_MODEL}.bin \
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL}.bin"
 
 # Compile TypeScript
 COPY . .
-RUN yarn build
+RUN NODE_OPTIONS=--max-old-space-size=4096 yarn build
 
 
 # ── Runtime stage ──────────────────────────────────────────────────────────────

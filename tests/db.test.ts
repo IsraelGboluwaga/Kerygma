@@ -29,6 +29,7 @@ function sampleSermon(overrides: Partial<SaveSermonInput> = {}): SaveSermonInput
     download_url: 'https://example.com/sermon.mp3',
     speaker: 'Pastor Test',
     duration: 3600,
+    series: 'Faith Foundations-2024',
     ...overrides,
   }
 }

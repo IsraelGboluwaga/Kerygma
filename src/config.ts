@@ -4,6 +4,7 @@ import { z } from 'zod'
 const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
   ADMIN_SECRET: z.string().min(1, 'ADMIN_SECRET is required'),
+  MINISTRY_NAME: z.string().min(1).default('the church'),
   DB_PATH: z.string().default('./data/sermons.db'),
   PORT: z.coerce.number().int().positive().default(3000),
   MAX_AUDIO_DURATION_SECONDS: z.coerce.number().int().positive().default(7200),

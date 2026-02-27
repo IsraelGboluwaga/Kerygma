@@ -36,17 +36,19 @@ export async function transcribeAudio(filePath: string): Promise<TranscribeResul
     },
   })
 
-  // whisper.cpp writes a sidecar JSON file next to the input file
-  const jsonPath = filePath.replace(/\.[^.]+$/, '.json')
+  // nodejs-whisper converts the input to WAV before running whisper-cli,
+  // so the sidecar is written next to the WAV file, not the original MP3.
+  const wavPath = filePath.replace(/\.[^.]+$/, '.wav')
+  const jsonPath = `${wavPath}.json`
 
   let raw: WhisperOutput
   try {
     raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as WhisperOutput
   } finally {
-    // Always clean up the sidecar
+    // Clean up sidecars
     try { fs.unlinkSync(jsonPath) } catch { /* ignore */ }
-    // Also remove any .txt sidecar whisper may have written
-    const txtPath = filePath.replace(/\.[^.]+$/, '.txt')
+    try { fs.unlinkSync(wavPath) } catch { /* ignore */ }
+    const txtPath = `${wavPath}.txt`
     try { fs.unlinkSync(txtPath) } catch { /* ignore */ }
   }
 

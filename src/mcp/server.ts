@@ -91,7 +91,7 @@ function fetchChunksByDateAndSpeaker(
     ok: true,
     chunks: chunks.map((c) => {
       const s = sermonMap.get(c.sermon_id)!
-      return { ...c, sermon_title: s.title, date: s.date, url: s.url, speaker: s.speaker }
+      return { ...c, sermon_title: s.title, date: s.date, download_url: s.download_url, webpage_url: s.webpage_url, speaker: s.speaker, series: s.series ?? null }
     }),
   }
 }
@@ -128,7 +128,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
       const text = rows
         .map(
           (r) =>
-            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}${r.webpage_url ? `\n  URL: ${r.webpage_url}` : ''}`
+            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}${r.series ? `\n  Series: ${r.series}` : ''}${r.webpage_url ? `\n  URL: ${r.webpage_url}` : ''}`
         )
         .join('\n\n')
 
@@ -195,7 +195,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
           messages: [
             {
               role: 'user',
-              content: `Based on the following sermon excerpts, answer this question:
+              content: `You are a helpful assistant for ${config.MINISTRY_NAME}. Based on the following sermon excerpts, answer this question:
 "${question}"
 
 ${context}
@@ -251,7 +251,7 @@ If the excerpts don't contain enough information to answer, say so.`,
           messages: [
             {
               role: 'user',
-              content: `Based on the following sermon excerpts, provide a comprehensive summary of what was preached.
+              content: `You are a helpful assistant for ${config.MINISTRY_NAME}. Based on the following sermon excerpts, provide a comprehensive summary of what was preached.
 
 ${context}
 
@@ -322,6 +322,7 @@ Cite the sermon title, date, and relevant timestamps.`,
             `Sermon: ${sermonTitle}\n` +
             `Date: ${first.date}\n` +
             `Speaker: ${first.speaker ?? 'Unknown'}\n` +
+            (first.series ? `Series: ${first.series}\n` : '') +
             (first.webpage_url ? `URL: ${first.webpage_url}\n` : '') +
             `Relevant sections:\n${sections}`
           )

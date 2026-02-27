@@ -1,10 +1,13 @@
+import { config } from '../config.js'
+
 export function adminHtml(): string {
+  const ministry = config.MINISTRY_NAME
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kerygma Admin</title>
+  <title>${ministry} — Admin</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -68,8 +71,8 @@ export function adminHtml(): string {
 </head>
 <body>
 <div class="container">
-  <h1>Kerygma Admin</h1>
-  <p class="subtitle">Ingest a sermon MP3 into the knowledge base.</p>
+  <h1>${ministry}</h1>
+  <p class="subtitle">Sermon ingestion admin</p>
 
   <div class="card">
     <div class="secret-field field">
@@ -93,19 +96,23 @@ export function adminHtml(): string {
           <input type="text" id="title" name="title" placeholder="Sunday Service" required>
         </div>
         <div class="field">
-          <label for="speaker">Speaker <span style="color:#e11d48">*</span></label>
-          <input type="text" id="speaker" name="speaker" placeholder="Apostle Emmanuel Iren" required>
+          <label for="series">Series <span style="color:#9ca3af">(optional)</span></label>
+          <input type="text" id="series" name="series" placeholder="Faith Foundations">
         </div>
       </div>
       <div class="row">
         <div class="field">
+          <label for="speaker">Speaker <span style="color:#e11d48">*</span></label>
+          <input type="text" id="speaker" name="speaker" placeholder="Apostle Emmanuel Iren" required>
+        </div>
+        <div class="field">
           <label for="date">Date <span style="color:#e11d48">*</span></label>
           <input type="date" id="date" name="date" required>
         </div>
-        <div class="field">
-          <label for="tags">Tags <span style="color:#9ca3af">(comma-separated)</span></label>
-          <input type="text" id="tags" name="tags" placeholder="faith, prayer, healing">
-        </div>
+      </div>
+      <div class="field">
+        <label for="tags">Tags <span style="color:#9ca3af">(comma-separated, optional)</span></label>
+        <input type="text" id="tags" name="tags" placeholder="faith, prayer, healing">
       </div>
       <button type="submit" id="submit-btn">Ingest Sermon</button>
     </form>
@@ -123,6 +130,10 @@ export function adminHtml(): string {
   const submitBtn = document.getElementById('submit-btn')
   const statusBox = document.getElementById('status-box')
   const jobsTable = document.getElementById('jobs-table')
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+  }
 
   function getSecret() {
     return document.getElementById('secret').value.trim()
@@ -147,11 +158,12 @@ export function adminHtml(): string {
       const jobs = await res.json()
       if (!jobs.length) return
       const rows = jobs.map(j => {
-        const t = new Date(j.createdAt).toLocaleTimeString()
-        const msg = j.error || (j.result && j.result.message) || ''
-        return '<tr><td>' + t + '</td><td>' + badgeHtml(j.status) + '</td><td>' + msg + '</td></tr>'
+        const t = new Date(j.createdAt).toLocaleString()
+        const title = j.title || '—'
+        const msg = j.message || j.error || ''
+        return '<tr><td>' + t + '</td><td>' + escHtml(title) + '</td><td>' + badgeHtml(j.status) + '</td><td>' + escHtml(msg) + '</td></tr>'
       }).join('')
-      jobsTable.innerHTML = '<table><thead><tr><th>Time</th><th>Status</th><th>Message</th></tr></thead><tbody>' + rows + '</tbody></table>'
+      jobsTable.innerHTML = '<table><thead><tr><th>Time</th><th>Title</th><th>Status</th><th>Message</th></tr></thead><tbody>' + rows + '</tbody></table>'
     } catch {}
   }
 
@@ -164,13 +176,13 @@ export function adminHtml(): string {
         const job = await res.json()
         if (job.status === 'done') {
           clearInterval(interval)
-          const msg = (job.result && job.result.message) || 'Done'
+          const msg = job.message || 'Done'
           showStatus('Done: ' + msg, 'done')
           submitBtn.disabled = false
           loadJobs()
         } else if (job.status === 'failed') {
           clearInterval(interval)
-          const msg = (job.result && job.result.message) || job.error || 'Unknown error'
+          const msg = job.message || job.error || 'Unknown error'
           showStatus('Failed: ' + msg, 'failed')
           submitBtn.disabled = false
           loadJobs()
@@ -195,6 +207,7 @@ export function adminHtml(): string {
       downloadUrl: document.getElementById('downloadUrl').value.trim(),
       webpageUrl: document.getElementById('webpageUrl').value.trim() || undefined,
       title:      document.getElementById('title').value.trim(),
+      series:     document.getElementById('series').value.trim() || undefined,
       speaker:    document.getElementById('speaker').value.trim(),
       date:       document.getElementById('date').value,
       tags:       tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : undefined,

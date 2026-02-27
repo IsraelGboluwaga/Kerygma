@@ -9,12 +9,14 @@ import { loadEmbedder } from './ingestion/embedder.js'
 import { createMcpServer } from './mcp/server.js'
 import { createRouter } from './web/router.js'
 import { waitUntilIdle } from './queue.js'
+import { failStaleJobs } from './db/queries.js'
 
 async function main() {
   logger.info('Starting up...')
 
   // 1. Initialise SQLite
   initDatabase()
+  failStaleJobs() // mark any pending/running jobs from previous run as failed
   logger.info(`Database ready at ${config.DB_PATH}`)
 
   // 2. Warm up embedding model

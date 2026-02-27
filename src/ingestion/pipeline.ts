@@ -23,6 +23,7 @@ export interface IngestRequest {
   title: string
   speaker: string
   date: string          // YYYY-MM-DD
+  series?: string
   tags?: string[]
 }
 
@@ -43,6 +44,12 @@ export class AudioTooLongError extends Error {
 
 function makeVideoId(url: string): string {
   return crypto.createHash('sha256').update(url).digest('hex').slice(0, 16)
+}
+
+function formatSeries(series: string | undefined, date: string): string | undefined {
+  if (!series) return undefined
+  const year = date.slice(0, 4)
+  return `${series}-${year}`
 }
 
 function defaultTitle(url: string): string {
@@ -152,6 +159,7 @@ export async function ingestSermon(
       speaker: req.speaker,
       duration: Math.round(duration),
       tags: req.tags,
+      series: formatSeries(req.series, req.date),
       transcription: JSON.stringify(segments),
     })
 

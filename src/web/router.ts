@@ -61,7 +61,7 @@ export function createRouter(anthropic: Anthropic): Hono {
         .join('\n\n')
 
       systemPrompt = [
-        'You are a helpful assistant for a church community.',
+        `You are a helpful assistant for ${config.MINISTRY_NAME}.`,
         'Answer questions based solely on the sermon excerpts below.',
         'Cite the sermon title, date, and timestamp when referencing specific content.',
         'If the question cannot be answered from the excerpts, say so clearly.',
@@ -141,8 +141,14 @@ export function createRouter(anthropic: Anthropic): Hono {
     if (!req.downloadUrl || !req.title || !req.speaker || !req.date) {
       return c.json({ error: 'downloadUrl, title, speaker, and date are required' }, 400)
     }
+    if (req.series && typeof req.series !== 'string') {
+      return c.json({ error: 'series must be a string' }, 400)
+    }
 
-    const jobId = enqueue(() => ingestSermon(req, anthropic))
+    const jobId = enqueue(() => ingestSermon(req, anthropic), {
+      title: req.title,
+      downloadUrl: req.downloadUrl,
+    })
     return c.json({ jobId }, 202)
   })
 
