@@ -8,7 +8,7 @@ const envSchema = z.object({
   DB_PATH: z.string().default('./data/sermons.db'),
   PORT: z.coerce.number().int().positive().default(3000),
   MAX_AUDIO_DURATION_SECONDS: z.coerce.number().int().positive().default(7200),
-  WHISPER_MODEL: z.string().default('base.en'),
+  WHISPER_MODEL: z.string().default('medium.en'),
   CLAUDE_MODEL: z.string().default('claude-sonnet-4-20250514'),
 })
 

@@ -136,7 +136,7 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    DB_PATH=/data/sermons.db
    PORT=3000
    MAX_AUDIO_DURATION_SECONDS=7200
-   WHISPER_MODEL=base.en
+   WHISPER_MODEL=medium.en
    ```
 
 3. **Build the image**
