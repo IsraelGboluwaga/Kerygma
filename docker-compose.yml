@@ -10,9 +10,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DB_PATH=/data/sermons.db
-      - XENOVA_CACHE=/data/models
+      - DB_PATH=/app/data/sermons.db
+      - XENOVA_CACHE=/app/data/models
       - WHISPER_MODEL=${WHISPER_MODEL:-medium.en}
     volumes:
-      - ./data:/data
+      - ./data:/app/data
     restart: unless-stopped
