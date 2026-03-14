@@ -3,13 +3,25 @@ import { getDb } from './connection.js'
 // FTS5 has its own query syntax — special characters like ", *, (, ) cause parse
 // errors if passed raw. Split into tokens and double-quote each so the query is
 // treated as a set of exact-token matches (AND semantics).
+const STOPWORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+  'of', 'with', 'by', 'from', 'is', 'it', 'its', 'was', 'are', 'were',
+  'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+  'will', 'would', 'could', 'should', 'may', 'might', 'shall', 'can',
+  'what', 'which', 'who', 'whom', 'when', 'where', 'why', 'how',
+  'this', 'that', 'these', 'those', 'i', 'me', 'my', 'we', 'our',
+  'you', 'your', 'he', 'she', 'his', 'her', 'they', 'their', 'them',
+  'about', 'say', 'said', 'tell', 'told', 'know', 'think',
+])
+
 function sanitizeFtsQuery(query: string): string {
   const tokens = query
     .replace(/['"*()\^~\-]/g, ' ')
     .split(/\s+/)
     .filter(Boolean)
+    .filter((t) => !STOPWORDS.has(t.toLowerCase()))
     .map((t) => `"${t}"`)
-  return tokens.length > 0 ? tokens.join(' ') : '""'
+  return tokens.length > 0 ? tokens.join(' OR ') : '""'
 }
 
 export interface SermonRow {
@@ -211,6 +223,7 @@ export interface JobRow {
   id: string
   title: string | null
   download_url: string | null
+  payload: string | null
   status: string
   message: string | null
   error: string | null
@@ -223,6 +236,7 @@ export function upsertJob(job: {
   id: string
   title?: string
   download_url?: string
+  payload?: string
   status: string
   message?: string
   error?: string
@@ -232,8 +246,8 @@ export function upsertJob(job: {
 }): void {
   getDb()
     .prepare(
-      `INSERT INTO jobs (id, title, download_url, status, message, error, created_at, started_at, completed_at)
-       VALUES (@id, @title, @download_url, @status, @message, @error, @created_at, @started_at, @completed_at)
+      `INSERT INTO jobs (id, title, download_url, payload, status, message, error, created_at, started_at, completed_at)
+       VALUES (@id, @title, @download_url, @payload, @status, @message, @error, @created_at, @started_at, @completed_at)
        ON CONFLICT(id) DO UPDATE SET
          status       = excluded.status,
          message      = excluded.message,
@@ -245,6 +259,7 @@ export function upsertJob(job: {
       id: job.id,
       title: job.title ?? null,
       download_url: job.download_url ?? null,
+      payload: job.payload ?? null,
       status: job.status,
       message: job.message ?? null,
       error: job.error ?? null,
@@ -270,7 +285,7 @@ export function failStaleJobs(): void {
   getDb()
     .prepare(
       `UPDATE jobs SET status = 'failed', error = 'Server restarted while job was running'
-       WHERE status IN ('pending', 'running')`
+       WHERE status IN ('queued', 'running')`
     )
     .run()
 }

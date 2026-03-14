@@ -2,20 +2,24 @@
 
 ## Overview
 
-One Node.js process. One port (3000). Two jobs:
-1. **Admin UI** — lets a church admin paste an MP3 link and ingest a sermon
-2. **MCP Server** — lets Claude answer questions about sermons
+One Node.js process. One port (3000). Three jobs:
+1. **Web Chat UI** — lets church members ask questions about sermons
+2. **Admin UI** — lets a church admin ingest MP3 sermons via a password-gated form
+3. **MCP Server** — lets Claude Desktop (or any MCP client) query sermons programmatically
 
 ```
+Browser (Member)
+    │  GET  /              → Chat UI (HTML)
+    │  POST /              → SSE stream (Claude answer)
+    ▼
 Browser (Admin)
-    │  POST /admin/ingest (form data)
+    │  GET  /admin         → Admin UI (HTML, password-gated)
+    │  POST /admin/ingest  → Enqueue job → 202 + jobId  (JSON body)
+    │  GET  /admin/jobs    → List recent job statuses
+    │  GET  /admin/jobs/:id→ Poll a single job
     ▼
 Hono HTTP Server (:3000)
-    ├── GET  /admin          → Admin form page (password-protected)
-    ├── POST /admin/ingest   → Add job to queue → 202 + jobId
-    ├── GET  /admin/jobs     → List recent job statuses
-    ├── GET  /admin/jobs/:id → Poll a single job
-    └── GET  /health         → { ok: true }
+    └── GET /health        → { ok: true }
          │
     In-process job queue (FIFO, sequential — one job at a time)
          │
@@ -47,13 +51,18 @@ process crashes with a clear error before doing anything else. Exports a frozen 
 
 Key variables: `ANTHROPIC_API_KEY`, `ADMIN_SECRET`, `MINISTRY_NAME` (used in UI titles and AI system prompts), `WHISPER_MODEL` (must match the model baked into the Docker image).
 
+### `src/utils.ts`
+Small shared utilities. Currently exports `errMsg(err)` — safely extracts a string from
+any thrown value (`err.message` for `Error` instances, `String(err)` otherwise).
+
 ### `src/db/schema.ts`
 Defines the SQLite DDL:
 - `sermons` table — one row per ingested MP3
 - `chunks` table — many rows per sermon (each chunk = one section of the sermon)
 - `chunks_fts` — virtual FTS5 table for full-text search (auto-synced via triggers)
-- Migration shims — `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` so an existing DB
-  keeps working after adding new columns
+- `jobs` table — persisted job queue state for history and cross-restart visibility
+- Migration shims — `ALTER TABLE` statements run only when a column is absent, so an
+  existing DB keeps working after adding new columns
 
 ### `src/db/connection.ts`
 Creates a single `better-sqlite3` instance and runs `initDatabase()` once at startup.
@@ -70,8 +79,9 @@ Typed functions for every DB operation:
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
 - `getSpeakersMatchingFilter(filter)` → `string[]` — distinct speaker names matching substring
 - `getChunksBySermonId(id)` → `ChunkRow[]`
-- `searchChunks(query, limit)` → `ChunkWithSermon[]`
+- `searchChunks(query, limit)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance
 - `listSermons(limit)` → `SermonRow[]`
+- `upsertJob` / `getJobRow` / `listRecentJobRows` / `failStaleJobs` — job persistence
 
 ### `src/ingestion/downloader.ts`
 Streams an MP3 URL to a temp file using native `fetch`.
@@ -82,16 +92,18 @@ Uses `AbortSignal.timeout(5 * 60 * 1000)` to cap download time.
 Calls `nodejs-whisper` (Node bindings for whisper.cpp) on the temp file.
 nodejs-whisper converts the MP3 to WAV first, then runs `whisper-cli` on the WAV.
 whisper-cli writes the sidecar as `<file>.wav.json` (not `<file>.json`).
-The transcriber reads that path, maps timestamps from ms → seconds, then deletes the sidecar and WAV.
+The transcriber reads that path, maps timestamps from ms → seconds, then deletes all
+sidecars (`.wav`, `.wav.json`, `.wav.txt`) in a `finally` block.
 Returns `{ segments: TranscriptSegment[], duration: number }`.
 
 ### `src/ingestion/chunker.ts`
 - Formats transcript as `[MM:SS] text` lines
 - Sends to Claude with a semantic chunking prompt
+- Validates the response is a text block (throws on unexpected content type)
 - Parses JSON response
 - Runs `validateChunks` (sort → fill gaps/overlaps in one pass)
 - Attaches content text to each chunk
-- Exports `formatTimestamp` (used by MCP tools too)
+- Exports `formatTimestamp` (used by router and MCP tools)
 
 ### `src/ingestion/embedder.ts`
 Loads `Xenova/all-MiniLM-L6-v2` once at startup (~90MB download on first run).
@@ -119,10 +131,12 @@ Input:
 `series` is stored as `${series}-${year}` (e.g. `Faith Foundations-2024`). Speaker is required.
 
 ### `src/queue.ts`
-In-process FIFO queue. One `Map<string, Job>` + one string array of IDs.
-- `enqueue(fn)` → UUID — pushes a job, triggers `drain()` if nothing running
-- `drain()` — pops jobs one at a time; a failed job logs the error and moves on
-- `getJob(id)` / `getRecentJobs(n)` — for admin status polling
+In-process FIFO queue. Jobs are held in a `Map<string, Job>` (in-memory) and persisted to
+the `jobs` DB table so history survives server restarts.
+- `enqueue(fn, meta)` → UUID — pushes a job with title, downloadUrl, and payload (JSON of the original request for retries), triggers `drain()` if nothing is running
+- `drain()` — pops jobs one at a time; a failed job logs the error and moves on to the next
+- `getJob(id)` — checks in-memory first, falls back to DB for jobs from previous runs
+- `getRecentJobs(n)` — reads from DB, overlays in-memory state for active jobs
 - `waitUntilIdle()` — used during graceful shutdown
 
 ### `src/mcp/server.ts`
@@ -135,18 +149,33 @@ Registers 4 tools:
 
 Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`.
 
+### `src/web/chatHtml.ts`
+Returns the HTML string for the member-facing chat UI. Contains:
+- A message thread view (user bubbles right, assistant bubbles left)
+- Client-side SSE reader that streams Claude's response token by token
+- A collapsible "Sources" widget showing which sermon chunks informed each answer
+- New Conversation button
+
 ### `src/web/adminHtml.ts`
-Returns an HTML string — the admin page. Contains:
-- A form: MP3 URL, webpage URL, title, speaker, date, tags
-- Client-side JS that `fetch`-POSTs with `X-Admin-Secret` header
-- Polls `/admin/jobs/:id` every 3s until terminal state
-- Shows a live job status table
+Returns the HTML string for the admin page. Contains:
+- A password field — the form is locked until the correct `ADMIN_SECRET` is accepted (verified by attempting `GET /admin/jobs`; 401 keeps the form disabled)
+- An ingestion form: MP3 URL, webpage URL, title, series, speaker, date, tags
+- Client-side JS that `fetch`-POSTs JSON with `X-Admin-Secret` header, resets the form immediately after queuing so the next sermon can be entered without waiting
+- Polls `/admin/jobs/:id` every 3s until terminal state; skips redundant DOM updates when status hasn't changed
+- A live job history table with Retry buttons for failed jobs that have not since succeeded
 
 ### `src/web/router.ts`
-Hono app wiring all admin routes together.
-- Admin routes are behind an `X-Admin-Secret` middleware check
-- `/mcp` is handled at the raw Node HTTP level in `main.ts` (not inside Hono) to avoid
-  double-response writes when MCP transport closes the Node `ServerResponse` directly
+Hono app wiring all routes:
+
+**Chat (`/`)**
+- `GET /` — serves the chat UI
+- `POST /` — accepts `{ messages }`, searches chunks using the last user message (FTS5, stopword-filtered, OR semantics), builds a system prompt with matching excerpts (title | speaker | date | timestamp | URL), streams a Claude SSE response
+
+**Admin (`/admin/*`)** — all write routes protected by `X-Admin-Secret` middleware
+- `GET /admin` — serves the admin UI
+- `POST /admin/ingest` — validates JSON body, enqueues pipeline job, returns `{ jobId }` (202)
+- `GET /admin/jobs` — returns recent job list
+- `GET /admin/jobs/:id` — returns single job status
 
 ### `src/main.ts`
 Sequential startup:
@@ -158,11 +187,28 @@ Sequential startup:
 
 ---
 
+## Data Flow: Web Chat
+
+```
+Member opens browser → GET /
+    → chatHtml served
+
+Member types question → POST / { messages: [...] }
+    → find last user message
+    → searchChunks(lastUserMessage, 10)   FTS5, stopwords filtered, OR semantics
+    → build system prompt with chunk excerpts (title | speaker | date | URL)
+    → stream SSE response:
+        { type: 'context', sources }      sent first (populates Sources widget)
+        { type: 'delta', text }           streamed token by token
+        { type: 'done' }
+    → Claude answers based solely on provided excerpts
+```
+
 ## Data Flow: Ingestion
 
 ```
 Admin submits form
-    → POST /admin/ingest
+    → POST /admin/ingest  (JSON body)
     → queue.enqueue(job)        returns jobId immediately (202)
     → browser polls /admin/jobs/:jobId
 
@@ -242,6 +288,20 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(
     content, summary, topics,
     content_rowid='id', content='chunks'
 );
+
+-- Job queue persistence
+CREATE TABLE jobs (
+    id           TEXT PRIMARY KEY,      -- UUID
+    title        TEXT,
+    download_url TEXT,
+    payload      TEXT,                  -- JSON of original IngestRequest (for retry)
+    status       TEXT NOT NULL DEFAULT 'queued',  -- 'queued' | 'running' | 'done' | 'failed'
+    message      TEXT,                  -- success/failure summary
+    error        TEXT,                  -- error message on failure
+    created_at   TEXT NOT NULL,
+    started_at   TEXT,
+    completed_at TEXT
+);
 ```
 
 Migration shims in `schema.ts` handle existing databases: `ALTER TABLE` statements run only when a column is absent, so an old DB survives an upgrade without data loss.
@@ -258,7 +318,7 @@ Stage 1 — builder (node:20, Debian Bookworm)
     yarn install --frozen-lockfile          ← compiles better-sqlite3
     cmake -DGGML_NATIVE=OFF ...             ← compiles whisper-cli (native CPU
                                                detection disabled for Docker compat)
-    wget ggml-small.en.bin                  ← bakes Whisper model into image layer
+    wget ggml-medium.en.bin                  ← bakes Whisper model into image layer
     NODE_OPTIONS=--max-old-space-size=4096  ← tsc needs >2GB heap
     yarn build                              ← tsc → dist/
 
@@ -273,5 +333,5 @@ Both stages use the same Debian Bookworm base so compiled `.node` binaries are p
 
 To use a different Whisper model at build time:
 ```bash
-docker build --build-arg WHISPER_MODEL=small.en -t kerygma .
+docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
 ```

@@ -51,7 +51,7 @@ export function adminHtml(): string {
       font-size: 0.9rem; margin-top: 1rem;
       display: none;
     }
-    .status-pending { background: #fef9c3; color: #854d0e; }
+    .status-queued  { background: #fef9c3; color: #854d0e; }
     .status-running { background: #dbeafe; color: #1e40af; }
     .status-done    { background: #dcfce7; color: #166534; }
     .status-failed  { background: #fee2e2; color: #991b1b; }
@@ -62,11 +62,18 @@ export function adminHtml(): string {
       display: inline-block; padding: 0.15rem 0.5rem;
       border-radius: 999px; font-size: 0.75rem; font-weight: 500;
     }
-    .badge-pending { background: #fef9c3; color: #854d0e; }
+    .badge-queued  { background: #fef9c3; color: #854d0e; }
     .badge-running { background: #dbeafe; color: #1e40af; }
     .badge-done    { background: #dcfce7; color: #166534; }
     .badge-failed  { background: #fee2e2; color: #991b1b; }
     .secret-field { margin-bottom: 1.5rem; }
+    .retry-btn {
+      background: none; color: #4f46e5;
+      border: 1px solid #4f46e5; border-radius: 4px;
+      padding: 0.2rem 0.6rem; font-size: 0.78rem;
+      cursor: pointer;
+    }
+    .retry-btn:hover { background: #eef2ff; }
   </style>
 </head>
 <body>
@@ -120,7 +127,7 @@ export function adminHtml(): string {
   </div>
 
   <div class="card">
-    <h2>Recent Jobs</h2>
+    <h2>Recent Jobs <button type="button" id="refresh-btn" style="background:none;border:1px solid #d1d5db;border-radius:4px;padding:0.15rem 0.6rem;font-size:0.78rem;cursor:pointer;color:#374151;font-family:inherit;margin-left:0.5rem">Refresh</button></h2>
     <div id="jobs-table"><em style="color:#9ca3af">No jobs yet.</em></div>
   </div>
 </div>
@@ -132,12 +139,36 @@ export function adminHtml(): string {
   const jobsTable = document.getElementById('jobs-table')
 
   function escHtml(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
   }
 
   function getSecret() {
     return document.getElementById('secret').value.trim()
   }
+
+  function setFormEnabled(on) {
+    form.querySelectorAll('input, textarea, select, button').forEach(function(el) {
+      el.disabled = !on
+    })
+  }
+
+  // Form locked until secret is verified
+  setFormEnabled(false)
+
+  var debounceTimer = null
+  function scheduleLoadJobs() {
+    clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(loadJobs, 400)
+  }
+
+  document.getElementById('secret').addEventListener('input', scheduleLoadJobs)
+  document.getElementById('refresh-btn').addEventListener('click', loadJobs)
+
+  // Event delegation for retry buttons — one listener, no leak on re-render
+  jobsTable.addEventListener('click', function(e) {
+    var btn = e.target.closest('.retry-btn')
+    if (btn) retryJob(btn.dataset.payload)
+  })
 
   function showStatus(text, type) {
     statusBox.textContent = text
@@ -145,8 +176,10 @@ export function adminHtml(): string {
     statusBox.style.display = 'block'
   }
 
+  var VALID_STATUSES = ['queued', 'running', 'done', 'failed']
   function badgeHtml(status) {
-    return '<span class="badge badge-' + status + '">' + status + '</span>'
+    var s = VALID_STATUSES.includes(status) ? status : 'unknown'
+    return '<span class="badge badge-' + s + '">' + s + '</span>'
   }
 
   async function loadJobs() {
@@ -154,21 +187,33 @@ export function adminHtml(): string {
       const res = await fetch('/admin/jobs', {
         headers: { 'X-Admin-Secret': getSecret() }
       })
-      if (!res.ok) return
+      if (res.status === 401) { setFormEnabled(false); return }
+      if (!res.ok) { jobsTable.innerHTML = '<em style="color:#991b1b">Failed to load jobs (' + res.status + ')</em>'; return }
+      setFormEnabled(true)
       const jobs = await res.json()
-      if (!jobs.length) return
-      const rows = jobs.map(j => {
+      if (!jobs.length) { jobsTable.innerHTML = '<em style="color:#9ca3af">No jobs yet.</em>'; return }
+      const succeededUrls = new Set(
+        jobs.filter(function(j) { return j.status === 'done' && j.downloadUrl })
+            .map(function(j) { return j.downloadUrl })
+      )
+      const rows = jobs.map(function(j) {
         const t = new Date(j.createdAt).toLocaleString()
-        const title = j.title || '—'
+        const title = j.title || '\u2014'
         const msg = j.message || j.error || ''
-        return '<tr><td>' + t + '</td><td>' + escHtml(title) + '</td><td>' + badgeHtml(j.status) + '</td><td>' + escHtml(msg) + '</td></tr>'
+        const retryBtn = (j.status === 'failed' && j.payload && !succeededUrls.has(j.downloadUrl))
+          ? '<button class="retry-btn" data-payload="' + escHtml(j.payload) + '">Retry</button>'
+          : ''
+        return '<tr><td>' + t + '</td><td>' + escHtml(title) + '</td><td>' + badgeHtml(j.status) + '</td><td>' + escHtml(msg) + '</td><td>' + retryBtn + '</td></tr>'
       }).join('')
-      jobsTable.innerHTML = '<table><thead><tr><th>Time</th><th>Title</th><th>Status</th><th>Message</th></tr></thead><tbody>' + rows + '</tbody></table>'
-    } catch {}
+      jobsTable.innerHTML = '<table><thead><tr><th>Time</th><th>Title</th><th>Status</th><th>Message</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+    } catch (err) {
+      console.error('Failed to load jobs:', err)
+    }
   }
 
   async function pollJob(id) {
-    const interval = setInterval(async () => {
+    var lastStatus = null
+    var interval = setInterval(async () => {
       try {
         const res = await fetch('/admin/jobs/' + id, {
           headers: { 'X-Admin-Secret': getSecret() }
@@ -176,25 +221,40 @@ export function adminHtml(): string {
         const job = await res.json()
         if (job.status === 'done') {
           clearInterval(interval)
-          const msg = job.message || 'Done'
-          showStatus('Done: ' + msg, 'done')
-          submitBtn.disabled = false
+          showStatus('Done: ' + (job.message || 'Sermon ingested'), 'done')
           loadJobs()
         } else if (job.status === 'failed') {
           clearInterval(interval)
-          const msg = job.message || job.error || 'Unknown error'
-          showStatus('Failed: ' + msg, 'failed')
-          submitBtn.disabled = false
+          showStatus('Failed: ' + (job.message || job.error || 'Unknown error'), 'failed')
           loadJobs()
-        } else {
+        } else if (job.status !== lastStatus) {
+          lastStatus = job.status
           showStatus('Status: ' + job.status + '...', job.status)
         }
       } catch {
         clearInterval(interval)
-        showStatus('Lost connection while polling.', 'error')
-        submitBtn.disabled = false
+        showStatus('Lost connection while polling.', 'failed')
       }
     }, 3000)
+  }
+
+  async function retryJob(payload) {
+    const secret = getSecret()
+    if (!secret) return
+    try {
+      const res = await fetch('/admin/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Secret': secret },
+        body: payload,
+      })
+      if (!res.ok) { showStatus('Retry failed: ' + res.status, 'failed'); return }
+      const { jobId } = await res.json()
+      showStatus('Retry queued. Processing...', 'running')
+      pollJob(jobId)
+      loadJobs()
+    } catch (err) {
+      showStatus('Retry failed: ' + err.message, 'failed')
+    }
   }
 
   form.addEventListener('submit', async (e) => {
@@ -213,8 +273,7 @@ export function adminHtml(): string {
       tags:       tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : undefined,
     }
 
-    submitBtn.disabled = true
-    showStatus('Queued...', 'pending')
+    showStatus('Queued...', 'queued')
 
     try {
       const res = await fetch('/admin/ingest', {
@@ -222,20 +281,17 @@ export function adminHtml(): string {
         headers: { 'Content-Type': 'application/json', 'X-Admin-Secret': secret },
         body: JSON.stringify(body),
       })
-      if (res.status === 401) { showStatus('Wrong admin secret.', 'error'); submitBtn.disabled = false; return }
-      if (!res.ok) { showStatus('Server error: ' + res.status, 'error'); submitBtn.disabled = false; return }
+      if (res.status === 401) { showStatus('Wrong admin secret.', 'error'); return }
+      if (!res.ok) { showStatus('Server error: ' + res.status, 'error'); return }
       const { jobId } = await res.json()
-      showStatus('Job queued (id: ' + jobId + '). Processing...', 'running')
+      showStatus('Job queued. Processing...', 'running')
+      form.reset()
       pollJob(jobId)
       loadJobs()
     } catch (err) {
       showStatus('Request failed: ' + err.message, 'error')
-      submitBtn.disabled = false
     }
   })
-
-  // Load jobs on page open
-  loadJobs()
 </script>
 </body>
 </html>`

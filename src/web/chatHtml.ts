@@ -231,9 +231,8 @@ export function chatHtml(): string {
 
 <script>
 (function () {
-  var messages    = []
-  var systemPrompt = null
-  var busy        = false
+  var messages = []
+  var busy     = false
 
   var msgList  = document.getElementById('messages')
   var inputEl  = document.getElementById('input')
@@ -358,7 +357,6 @@ export function chatHtml(): string {
             try { ev = JSON.parse(line.slice(6)) } catch (e) { continue }
 
             if (ev.type === 'context') {
-              systemPrompt = ev.systemPrompt
               sources = ev.sources || null
             } else if (ev.type === 'delta') {
               if (!bubble) bubble = addAssistantBubble(sources)
@@ -393,11 +391,10 @@ export function chatHtml(): string {
     var typingRow = addTyping()
     setLoading(true)
 
-    var body = { messages: messages.slice() }
-    if (systemPrompt) body.systemPrompt = systemPrompt
+    var body = { messages: messages }
 
     try {
-      var res = await fetch('/chat', {
+      var res = await fetch('/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

@@ -7,7 +7,7 @@
   "packageManager": "yarn@1.22.22",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
     "test": "vitest run",
     "test:watch": "vitest",

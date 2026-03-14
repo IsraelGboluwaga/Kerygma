@@ -20,7 +20,7 @@ describe('queue', () => {
     const id = enqueue(() => new Promise((r) => setTimeout(() => r('x'), 50)))
     const job = getJob(id)
     expect(job).toBeDefined()
-    expect(['pending', 'running']).toContain(job!.status)
+    expect(['queued', 'running']).toContain(job!.status)
     await new Promise((r) => setTimeout(r, 80))
   })
 

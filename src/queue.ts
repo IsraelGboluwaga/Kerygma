@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { logger } from './logger.js'
+import { errMsg } from './utils.js'
 import { upsertJob, getJobRow, listRecentJobRows, type JobRow } from './db/queries.js'
 
-export type JobStatus = 'pending' | 'running' | 'done' | 'failed'
+export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
 
 export interface Job {
   id: string
   title?: string
   downloadUrl?: string
+  payload?: string
   status: JobStatus
   message?: string
   createdAt: Date
@@ -29,6 +31,7 @@ function persist(job: Job): void {
       id: job.id,
       title: job.title,
       download_url: job.downloadUrl,
+      payload: job.payload,
       status: job.status,
       message: job.message,
       error: job.error,
@@ -36,8 +39,9 @@ function persist(job: Job): void {
       startedAt: job.startedAt,
       completedAt: job.completedAt,
     })
-  } catch {
+  } catch (err) {
     // DB not ready (e.g. in tests without initDatabase())
+    logger.warn(`Failed to persist job ${job.id} to DB: ${errMsg(err)}`)
   }
 }
 
@@ -46,6 +50,7 @@ function rowToJob(row: JobRow): Job {
     id: row.id,
     title: row.title ?? undefined,
     downloadUrl: row.download_url ?? undefined,
+    payload: row.payload ?? undefined,
     status: row.status as JobStatus,
     message: row.message ?? undefined,
     error: row.error ?? undefined,
@@ -55,14 +60,15 @@ function rowToJob(row: JobRow): Job {
   }
 }
 
-export function enqueue(fn: JobFn, meta?: { title?: string; downloadUrl?: string }): string {
+export function enqueue(fn: JobFn, meta?: { title?: string; downloadUrl?: string; payload?: string }): string {
   const id = randomUUID()
   const job: Job = {
     id,
-    status: 'pending',
+    status: 'queued',
     createdAt: new Date(),
     title: meta?.title,
     downloadUrl: meta?.downloadUrl,
+    payload: meta?.payload,
   }
   jobs.set(id, job)
   fns.set(id, fn)
@@ -111,7 +117,7 @@ async function drain(): Promise<void> {
       }
     } catch (err) {
       job.status = 'failed'
-      job.error = err instanceof Error ? err.message : String(err)
+      job.error = errMsg(err)
       logger.error(`Job ${id} failed: ${job.error}`)
     } finally {
       job.completedAt = new Date()
@@ -130,7 +136,8 @@ export function getJob(id: string): Job | undefined {
   try {
     const row = getJobRow(id)
     return row ? rowToJob(row) : undefined
-  } catch {
+  } catch (err) {
+    logger.warn(`Failed to fetch job ${id} from DB: ${errMsg(err)}`)
     return undefined
   }
 }
@@ -140,8 +147,9 @@ export function getRecentJobs(limit = 50): Job[] {
     // Read full history from DB, overlay in-memory state for active jobs
     const rows = listRecentJobRows(limit)
     return rows.map((row) => jobs.get(row.id) ?? rowToJob(row))
-  } catch {
+  } catch (err) {
     // DB not available (tests)
+    logger.warn(`Failed to fetch recent jobs from DB, falling back to in-memory: ${errMsg(err)}`)
     return [...jobs.values()]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit)
