@@ -176,8 +176,10 @@ export function adminHtml(): string {
     statusBox.style.display = 'block'
   }
 
+  var VALID_STATUSES = ['queued', 'running', 'done', 'failed']
   function badgeHtml(status) {
-    return '<span class="badge badge-' + status + '">' + status + '</span>'
+    var s = VALID_STATUSES.includes(status) ? status : 'unknown'
+    return '<span class="badge badge-' + s + '">' + s + '</span>'
   }
 
   async function loadJobs() {
