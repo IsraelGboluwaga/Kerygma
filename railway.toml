@@ -3,3 +3,4 @@ builder = "dockerfile"
 
 [deploy]
 startCommand = "mkdir -p /data/whisper-models && for f in /data/whisper-models/*.bin; do [ -f \"$f\" ] && ln -sf \"$f\" \"node_modules/nodejs-whisper/cpp/whisper.cpp/models/$(basename $f)\"; done; node dist/main.js"
+healthcheckTimeout = 300

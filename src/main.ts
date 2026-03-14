@@ -19,12 +19,7 @@ async function main() {
   failStaleJobs() // mark any pending/running jobs from previous run as failed
   logger.info(`Database ready at ${config.DB_PATH}`)
 
-  // 2. Warm up embedding model
-  logger.info('Loading embedder...')
-  await loadEmbedder()
-  logger.info('Embedder ready')
-
-  // 3. Build handlers — single Anthropic instance shared across the app
+  // 2. Build handlers — single Anthropic instance shared across the app
   const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY })
   const app = createRouter(anthropic)
 
@@ -68,6 +63,13 @@ async function main() {
     logger.info(`Admin UI:     http://localhost:${config.PORT}/admin`)
     logger.info(`MCP endpoint: http://localhost:${config.PORT}/mcp`)
   })
+
+  // 3. Warm up embedding model in background — server is already accepting requests.
+  //    Ingestion jobs that need the embedder will await it naturally via getEmbedder().
+  logger.info('Loading embedder...')
+  loadEmbedder()
+    .then(() => logger.info('Embedder ready'))
+    .catch((err) => logger.error('Failed to load embedder', err))
 }
 
 main().catch((err) => {
