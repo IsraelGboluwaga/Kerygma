@@ -41,7 +41,7 @@ export function adminHtml(): string {
       flex-direction: column;
     }
     .col-left { border-right: 1px solid #e5e7eb; }
-    .col-right { overflow-y: auto; }
+    .col-right { overflow: hidden; display: flex; flex-direction: column; }
     .card {
       background: white;
       border-radius: 8px;
@@ -49,7 +49,8 @@ export function adminHtml(): string {
       box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
     .col-left .card { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-    .col-right .card { min-height: 0; }
+    .col-right .card { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #jobs-table { flex: 1; overflow-y: auto; min-height: 0; }
     h2 { font-size: 1rem; margin-bottom: 1rem; color: #333; }
     .field { margin-bottom: 1rem; }
     label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.3rem; color: #444; }
