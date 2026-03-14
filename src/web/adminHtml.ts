@@ -14,18 +14,42 @@ export function adminHtml(): string {
       font-family: system-ui, -apple-system, sans-serif;
       background: #f5f5f5;
       color: #1a1a1a;
-      padding: 2rem 1rem;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
-    .container { max-width: 700px; margin: 0 auto; }
-    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
-    .subtitle { color: #666; margin-bottom: 2rem; font-size: 0.9rem; }
+    .top-bar {
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 0.75rem 1.5rem;
+      flex-shrink: 0;
+    }
+    h1 { font-size: 1.1rem; font-weight: 600; }
+    .subtitle { color: #666; font-size: 0.8rem; }
+    .columns {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+      overflow: hidden;
+    }
+    .col {
+      padding: 1.5rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .col-left { border-right: 1px solid #e5e7eb; }
+    .col-right { overflow-y: auto; }
     .card {
       background: white;
       border-radius: 8px;
       padding: 1.5rem;
-      margin-bottom: 1.5rem;
       box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
+    .col-left .card { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+    .col-right .card { min-height: 0; }
     h2 { font-size: 1rem; margin-bottom: 1rem; color: #333; }
     .field { margin-bottom: 1rem; }
     label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.3rem; color: #444; }
@@ -77,58 +101,65 @@ export function adminHtml(): string {
   </style>
 </head>
 <body>
-<div class="container">
+
+<div class="top-bar">
   <h1>${ministry}</h1>
-  <p class="subtitle">Sermon ingestion admin</p>
+  <div class="subtitle">Sermon ingestion admin</div>
+</div>
 
-  <div class="card">
-    <div class="secret-field field">
-      <label for="secret">Admin Secret</label>
-      <input type="password" id="secret" placeholder="Enter admin secret" autocomplete="current-password">
+<div class="columns">
+  <div class="col col-left">
+    <div class="card">
+      <div class="secret-field field">
+        <label for="secret">Admin Secret</label>
+        <input type="password" id="secret" placeholder="Enter admin secret" autocomplete="current-password">
+      </div>
+
+      <h2>New Ingestion</h2>
+      <form id="ingest-form">
+        <div class="field">
+          <label for="downloadUrl">Download URL <span style="color:#e11d48">*</span></label>
+          <input type="url" id="downloadUrl" name="downloadUrl" placeholder="https://example.com/sermon.mp3" required>
+        </div>
+        <div class="field">
+          <label for="webpageUrl">Webpage URL <span style="color:#9ca3af">(optional)</span></label>
+          <input type="url" id="webpageUrl" name="webpageUrl" placeholder="https://church.org/services/2024-03-10">
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="title">Title <span style="color:#e11d48">*</span></label>
+            <input type="text" id="title" name="title" placeholder="Sunday Service" required>
+          </div>
+          <div class="field">
+            <label for="series">Series <span style="color:#9ca3af">(optional)</span></label>
+            <input type="text" id="series" name="series" placeholder="Faith Foundations">
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="speaker">Speaker <span style="color:#e11d48">*</span></label>
+            <input type="text" id="speaker" name="speaker" placeholder="Apostle Emmanuel Iren" required>
+          </div>
+          <div class="field">
+            <label for="date">Date <span style="color:#e11d48">*</span></label>
+            <input type="date" id="date" name="date" required>
+          </div>
+        </div>
+        <div class="field">
+          <label for="tags">Tags <span style="color:#9ca3af">(comma-separated, optional)</span></label>
+          <input type="text" id="tags" name="tags" placeholder="faith, prayer, healing">
+        </div>
+        <button type="submit" id="submit-btn">Ingest Sermon</button>
+      </form>
+      <div id="status-box"></div>
     </div>
-
-    <h2>New Ingestion</h2>
-    <form id="ingest-form">
-      <div class="field">
-        <label for="downloadUrl">Download URL <span style="color:#e11d48">*</span></label>
-        <input type="url" id="downloadUrl" name="downloadUrl" placeholder="https://example.com/sermon.mp3" required>
-      </div>
-      <div class="field">
-        <label for="webpageUrl">Webpage URL <span style="color:#9ca3af">(optional)</span></label>
-        <input type="url" id="webpageUrl" name="webpageUrl" placeholder="https://church.org/services/2024-03-10">
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="title">Title <span style="color:#e11d48">*</span></label>
-          <input type="text" id="title" name="title" placeholder="Sunday Service" required>
-        </div>
-        <div class="field">
-          <label for="series">Series <span style="color:#9ca3af">(optional)</span></label>
-          <input type="text" id="series" name="series" placeholder="Faith Foundations">
-        </div>
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="speaker">Speaker <span style="color:#e11d48">*</span></label>
-          <input type="text" id="speaker" name="speaker" placeholder="Apostle Emmanuel Iren" required>
-        </div>
-        <div class="field">
-          <label for="date">Date <span style="color:#e11d48">*</span></label>
-          <input type="date" id="date" name="date" required>
-        </div>
-      </div>
-      <div class="field">
-        <label for="tags">Tags <span style="color:#9ca3af">(comma-separated, optional)</span></label>
-        <input type="text" id="tags" name="tags" placeholder="faith, prayer, healing">
-      </div>
-      <button type="submit" id="submit-btn">Ingest Sermon</button>
-    </form>
-    <div id="status-box"></div>
   </div>
 
-  <div class="card">
-    <h2>Recent Jobs <button type="button" id="refresh-btn" style="background:none;border:1px solid #d1d5db;border-radius:4px;padding:0.15rem 0.6rem;font-size:0.78rem;cursor:pointer;color:#374151;font-family:inherit;margin-left:0.5rem">Refresh</button></h2>
-    <div id="jobs-table"><em style="color:#9ca3af">No jobs yet.</em></div>
+  <div class="col col-right">
+    <div class="card">
+      <h2>Recent Jobs <button type="button" id="refresh-btn" style="background:none;border:1px solid #d1d5db;border-radius:4px;padding:0.15rem 0.6rem;font-size:0.78rem;cursor:pointer;color:#374151;font-family:inherit;margin-left:0.5rem">Refresh</button></h2>
+      <div id="jobs-table"><em style="color:#9ca3af">No jobs yet.</em></div>
+    </div>
   </div>
 </div>
 
