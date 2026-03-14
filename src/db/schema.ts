@@ -34,7 +34,8 @@ export function initDb(db: Database.Database): void {
       id           TEXT PRIMARY KEY,
       title        TEXT,
       download_url TEXT,
-      status       TEXT NOT NULL DEFAULT 'pending',
+      payload      TEXT,
+      status       TEXT NOT NULL DEFAULT 'queued',
       message      TEXT,
       error        TEXT,
       created_at   TEXT NOT NULL,
@@ -107,5 +108,14 @@ export function initDb(db: Database.Database): void {
 
   if (!chunkColNames.has('embedding')) {
     db.exec(`ALTER TABLE chunks ADD COLUMN embedding BLOB`)
+  }
+
+  const existingJobCols = db
+    .prepare(`PRAGMA table_info(jobs)`)
+    .all() as Array<{ name: string }>
+  const jobColNames = new Set(existingJobCols.map((c) => c.name))
+
+  if (!jobColNames.has('payload')) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN payload TEXT`)
   }
 }

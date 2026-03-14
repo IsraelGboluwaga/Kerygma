@@ -25,10 +25,12 @@ RUN cd node_modules/nodejs-whisper/cpp/whisper.cpp && \
     && cmake --build build -j2
 
 # Download whisper model into the package's models directory
-# Override at build time with: docker build --build-arg WHISPER_MODEL=small.en
-ARG WHISPER_MODEL=small.en
-RUN wget -q -O node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-${WHISPER_MODEL}.bin \
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL}.bin"
+# Override at build time with: docker build --build-arg WHISPER_MODEL=medium.en
+ARG WHISPER_MODEL=medium.en
+RUN wget -O node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-${WHISPER_MODEL}.bin \
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${WHISPER_MODEL}.bin" \
+    && test $(stat -c%s node_modules/nodejs-whisper/cpp/whisper.cpp/models/ggml-${WHISPER_MODEL}.bin) -gt 50000000 \
+    || (echo "ERROR: model download incomplete — check URL or network" && exit 1)
 
 # Compile TypeScript
 COPY . .

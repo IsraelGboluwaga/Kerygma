@@ -83,7 +83,11 @@ ${formatted}`,
     ],
   }))
 
-  let text = response.content[0].type === 'text' ? response.content[0].text : ''
+  const firstBlock = response.content[0]
+  if (!firstBlock || firstBlock.type !== 'text') {
+    throw new Error(`Unexpected Claude response content type: ${firstBlock?.type ?? 'empty'}`)
+  }
+  let text = firstBlock.text
 
   // Strip markdown code fences if present
   if (text.startsWith('```')) {

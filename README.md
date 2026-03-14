@@ -153,9 +153,9 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
 
    The `-v kerygma-data:/data` flag creates a named volume so the SQLite database persists across container restarts. The server starts at `http://localhost:3000`.
 
-To use a larger Whisper model (e.g. `small.en`):
+To use a larger Whisper model (e.g. `medium.en`):
 ```bash
-docker build --build-arg WHISPER_MODEL=small.en -t kerygma .
+docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
 ```
 
 ---
@@ -255,7 +255,7 @@ What has Apostle Emmanuel Iren said about healing?
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
-| `WHISPER_MODEL` | No | `small.en` | Whisper model name |
+| `WHISPER_MODEL` | No | `medium.en` | Whisper model name |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
 
 ---

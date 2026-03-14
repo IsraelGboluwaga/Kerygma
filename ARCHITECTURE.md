@@ -258,7 +258,7 @@ Stage 1 — builder (node:20, Debian Bookworm)
     yarn install --frozen-lockfile          ← compiles better-sqlite3
     cmake -DGGML_NATIVE=OFF ...             ← compiles whisper-cli (native CPU
                                                detection disabled for Docker compat)
-    wget ggml-small.en.bin                  ← bakes Whisper model into image layer
+    wget ggml-medium.en.bin                  ← bakes Whisper model into image layer
     NODE_OPTIONS=--max-old-space-size=4096  ← tsc needs >2GB heap
     yarn build                              ← tsc → dist/
 
@@ -273,5 +273,5 @@ Both stages use the same Debian Bookworm base so compiled `.node` binaries are p
 
 To use a different Whisper model at build time:
 ```bash
-docker build --build-arg WHISPER_MODEL=small.en -t kerygma .
+docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
 ```

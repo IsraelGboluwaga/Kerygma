@@ -1,8 +1,9 @@
 import fs from 'node:fs'
-import path from 'node:path'
 // nodejs-whisper exposes a named export, not a default export
 import { nodewhisper as whisper } from 'nodejs-whisper'
 import { config } from '../config.js'
+import { logger } from '../logger.js'
+import { errMsg } from '../utils.js'
 
 export interface TranscriptSegment {
   text: string
@@ -29,10 +30,8 @@ export async function transcribeAudio(filePath: string): Promise<TranscribeResul
     modelName: config.WHISPER_MODEL,
     autoDownloadModelName: config.WHISPER_MODEL,
     removeWavFileAfterTranscription: false,
-    withCuda: false,
     whisperOptions: {
       outputInJsonFull: true,
-      wordTimestamps: false,
     },
   })
 
@@ -46,10 +45,12 @@ export async function transcribeAudio(filePath: string): Promise<TranscribeResul
     raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as WhisperOutput
   } finally {
     // Clean up sidecars
-    try { fs.unlinkSync(jsonPath) } catch { /* ignore */ }
-    try { fs.unlinkSync(wavPath) } catch { /* ignore */ }
     const txtPath = `${wavPath}.txt`
-    try { fs.unlinkSync(txtPath) } catch { /* ignore */ }
+    for (const p of [jsonPath, wavPath, txtPath]) {
+      try { fs.unlinkSync(p) } catch (err) {
+        logger.warn(`Failed to delete temp file ${p}: ${errMsg(err)}`)
+      }
+    }
   }
 
   const segments: TranscriptSegment[] = raw.transcription.map((s) => ({

@@ -4,6 +4,7 @@ import { URL } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
+import { errMsg } from '../utils.js'
 import {
   getSermonByVideoId,
   saveSermon,
@@ -116,7 +117,7 @@ export async function ingestSermon(
         sermonId: existing.id,
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = errMsg(err)
       return { status: 'error', message }
     }
   }
