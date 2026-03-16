@@ -8,6 +8,7 @@ export function chatHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${ministry}</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -80,19 +81,28 @@ export function chatHtml(): string {
       border-radius: 14px;
       font-size: 0.93rem;
       line-height: 1.6;
-      white-space: pre-wrap;
       word-break: break-word;
     }
     .user .bubble {
       background: #4f46e5;
       color: white;
       border-bottom-right-radius: 4px;
+      white-space: pre-wrap;
     }
     .assistant .bubble {
       background: white;
       box-shadow: 0 1px 3px rgba(0,0,0,0.08);
       border-bottom-left-radius: 4px;
     }
+    .assistant .bubble p { margin-bottom: 0.6rem; }
+    .assistant .bubble p:last-child { margin-bottom: 0; }
+    .assistant .bubble ul,
+    .assistant .bubble ol { padding-left: 1.4rem; margin-bottom: 0.6rem; }
+    .assistant .bubble li { margin-bottom: 0.2rem; }
+    .assistant .bubble strong { font-weight: 600; }
+    .assistant .bubble h1,
+    .assistant .bubble h2,
+    .assistant .bubble h3 { font-weight: 600; margin: 0.6rem 0 0.3rem; }
 
     .dots-wrap {
       display: flex;
@@ -361,7 +371,7 @@ export function chatHtml(): string {
             } else if (ev.type === 'delta') {
               if (!bubble) bubble = addAssistantBubble(sources)
               text += ev.text
-              bubble.textContent = text
+              bubble.innerHTML = marked.parse(text)
               scroll()
             } else if (ev.type === 'done') {
               messages.push({ role: 'assistant', content: text })
