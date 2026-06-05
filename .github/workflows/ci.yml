@@ -24,6 +24,8 @@ jobs:
 
       - name: Type check
         run: yarn typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Lint
         run: yarn lint
