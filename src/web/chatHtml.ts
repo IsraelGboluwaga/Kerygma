@@ -234,7 +234,7 @@ export function chatHtml(): string {
 <header>
   <div>
     <img class="header-logo" src="/assets/cci_logo.svg" alt="${ministry}" />
-    <div class="subtitle">Sermon library</div>
+    <div class="subtitle">AI Library</div>
   </div>
   <button class="new-btn" id="new-btn">New conversation</button>
 </header>
