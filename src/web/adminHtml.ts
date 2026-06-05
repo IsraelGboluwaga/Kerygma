@@ -244,7 +244,7 @@ export function adminHtml(): string {
       )
       const rows = jobs.map(function(j) {
         const t = new Date(j.createdAt).toLocaleString()
-        const title = j.title || '\u2014'
+        const title = j.title || '—'
         const msg = j.message || j.error || ''
         const retryBtn = (j.status === 'failed' && j.payload && !succeededUrls.has(j.downloadUrl))
           ? '<button class="retry-btn" data-payload="' + escHtml(j.payload) + '">Retry</button>'

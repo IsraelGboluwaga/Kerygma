@@ -12,7 +12,9 @@ import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
 import { adminHtml } from './adminHtml.js'
+import { dbHtml } from './dbHtml.js'
 import { chatHtml } from './chatHtml.js'
+import { getDb } from '../db/connection.js'
 
 const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
 
@@ -215,6 +217,41 @@ export function createRouter(anthropic: Anthropic): Hono {
     const job = getJob(c.req.param('id'))
     if (!job) return c.json({ error: 'Job not found' }, 404)
     return c.json(job)
+  })
+
+  // ── DB Browser UI + data API ───────────────────────────────────────────
+  const DB_TABLES = new Set(['sermons', 'chunks', 'jobs'])
+
+  app.get('/lyrical-theology', (c) => c.html(dbHtml()))
+
+  app.use('/lyrical-theology/:table', adminMiddleware)
+
+  app.get('/lyrical-theology/:table', (c) => {
+    const table = c.req.param('table')
+    if (!DB_TABLES.has(table)) {
+      return c.json({ error: 'Unknown table' }, 400)
+    }
+
+    const limit = Math.min(Math.max(1, parseInt(c.req.query('limit') ?? '50', 10)), 200)
+    const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10))
+
+    const db = getDb()
+    const pragma = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    const columns = pragma.map((r) => r.name)
+    const { count } = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number }
+    const rawRows = db
+      .prepare(`SELECT * FROM ${table} ORDER BY rowid DESC LIMIT ? OFFSET ?`)
+      .all(limit, offset) as Record<string, unknown>[]
+
+    const rows = rawRows.map((row) => {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(row)) {
+        out[k] = Buffer.isBuffer(v) ? `[blob: ${v.length}B]` : v
+      }
+      return out
+    })
+
+    return c.json({ columns, rows, total: count, limit, offset })
   })
 
   return app
