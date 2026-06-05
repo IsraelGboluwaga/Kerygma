@@ -354,24 +354,18 @@ The image uses a two-stage build to keep the runtime image small:
 
 ```
 Stage 1 — builder (node:20, Debian Bookworm)
-    apt-get install cmake build-essential python3 wget
-    yarn install --frozen-lockfile          ← compiles better-sqlite3
-    cmake -DGGML_NATIVE=OFF ...             ← compiles whisper-cli (native CPU
-                                               detection disabled for Docker compat)
-    wget ggml-medium.en.bin                  ← bakes Whisper model into image layer
-    NODE_OPTIONS=--max-old-space-size=4096  ← tsc needs >2GB heap
-    yarn build                              ← tsc → dist/
+    apt-get install build-essential python3  ← compile better-sqlite3 native addon
+    yarn install --frozen-lockfile
+    NODE_OPTIONS=--max-old-space-size=4096   ← tsc needs >2GB heap
+    yarn build                               ← tsc → dist/
 
 Stage 2 — runtime (node:20-slim, same Debian Bookworm)
-    apt-get install ffmpeg           ← needed at runtime for MP3→WAV conversion
+    apt-get install ffmpeg           ← re-encodes audio > 25 MB before Whisper API upload
+                    libstdc++6       ← C++ runtime stripped from node:20-slim, needed by
+                    libgomp1            better-sqlite3
     COPY dist/ node_modules/ package.json from builder
 ```
 
 Both stages use the same Debian Bookworm base so compiled `.node` binaries are portable between them (same glibc ABI).
 
 **Layer caching:** `apt-get` and `yarn install` layers are cached until `yarn.lock` changes. Code changes only invalidate the final `COPY . .` + `yarn build` layers, making rebuilds fast.
-
-To use a different Whisper model at build time:
-```bash
-docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
-```

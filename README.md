@@ -135,13 +135,9 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    Edit `.env`:
    ```env
    ANTHROPIC_API_KEY=sk-ant-...
+   OPENAI_API_KEY=sk-...
    ADMIN_SECRET=your-secret-password
-
-   # Optional
-   DB_PATH=/data/sermons.db
-   PORT=3000
-   MAX_AUDIO_DURATION_SECONDS=7200
-   WHISPER_MODEL=medium.en
+   SERMON_BASE_URL=https://sermons-api.example.com
    ```
 
 3. **Build the image**
@@ -149,7 +145,7 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    docker build -t kerygma .
    ```
 
-   This compiles whisper.cpp and downloads the Whisper model into the image. Takes a few minutes on first build; subsequent code-only rebuilds are fast due to layer caching.
+   Builds the TypeScript source and compiles native addons. No large model downloads — transcription is handled by the OpenAI Whisper API at runtime.
 
 4. **Run**
    ```bash
@@ -158,21 +154,15 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
 
    The `-v kerygma-data:/data` flag creates a named volume so the SQLite database persists across container restarts. The server starts at `http://localhost:3000`.
 
-To use a larger Whisper model (e.g. `medium.en`):
-```bash
-docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
-```
-
 ---
 
 ### Local Development (without Docker)
 
-Requires: Node 20+, Yarn, cmake, ffmpeg (`brew install cmake ffmpeg` on macOS).
+Requires: Node 20+, Yarn, ffmpeg (`brew install ffmpeg` on macOS; `apt-get install ffmpeg` on Linux).
 
 ```bash
 yarn install
-npx nodejs-whisper download   # compiles whisper.cpp + downloads model (~142MB)
-cp .env.example .env          # fill in ANTHROPIC_API_KEY + ADMIN_SECRET
+cp .env.example .env          # fill in all required variables
 yarn dev
 ```
 
@@ -316,12 +306,11 @@ The Whisper model is downloaded during the Docker build step and baked into the 
 Docker layer order is optimised so code-only changes are fast:
 
 ```
-apt-get install cmake...    ← cached forever
-COPY package.json yarn.lock ← cached until deps change
-RUN yarn install            ← cached until yarn.lock changes (compiles whisper.cpp + sqlite)
-RUN wget whisper model      ← cached until yarn.lock changes
-COPY . .                    ← invalidated on every code change
-RUN yarn build              ← only this re-runs for code changes (~seconds)
+apt-get install build-essential...  ← cached forever
+COPY package.json yarn.lock         ← cached until deps change
+RUN yarn install                    ← cached until yarn.lock changes (compiles better-sqlite3)
+COPY . .                            ← invalidated on every code change
+RUN yarn build                      ← only this re-runs for code changes (~seconds)
 ```
 
 ---
