@@ -28,15 +28,7 @@ export function adminHtml(): string {
       gap: 1rem;
       flex-shrink: 0;
     }
-    .top-bar-logo {
-      font-size: 0.95rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: #fff;
-      line-height: 1;
-    }
-    .top-bar-logo span { color: #df4e4e; }
+    .top-bar-logo { height: 22px; width: auto; display: block; }
     .top-bar-divider { width: 1px; height: 20px; background: #2a2a2a; }
     .subtitle { color: #555; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
     .columns {
@@ -125,7 +117,7 @@ export function adminHtml(): string {
 <body>
 
 <div class="top-bar">
-  <div class="top-bar-logo">${ministry.toUpperCase().replace('CHURCH', '<span>CHURCH</span>')}</div>
+  <img class="top-bar-logo" src="/assets/logo-white.svg" alt="${ministry}" />
   <div class="top-bar-divider"></div>
   <div class="subtitle">Sermon ingestion</div>
 </div>

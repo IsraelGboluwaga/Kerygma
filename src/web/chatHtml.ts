@@ -30,15 +30,7 @@ export function chatHtml(): string {
       justify-content: space-between;
       flex-shrink: 0;
     }
-    .header-logo {
-      font-size: 1rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: #fff;
-      line-height: 1;
-    }
-    .header-logo span { color: #df4e4e; }
+    .header-logo { height: 28px; width: auto; display: block; }
     .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; }
 
     .new-btn {
@@ -241,7 +233,7 @@ export function chatHtml(): string {
 
 <header>
   <div>
-    <div class="header-logo">${ministry.toUpperCase().replace('CHURCH', '<span>CHURCH</span>')}</div>
+    <img class="header-logo" src="/assets/logo-white.svg" alt="${ministry}" />
     <div class="subtitle">Sermon library</div>
   </div>
   <button class="new-btn" id="new-btn">New conversation</button>
@@ -249,9 +241,7 @@ export function chatHtml(): string {
 
 <div id="messages">
   <div id="empty-state">
-    <svg class="empty-icon" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M20 4L4 14v22h10V24h12v12h10V14L20 4z" stroke="white" stroke-width="2" stroke-linejoin="round"/>
-    </svg>
+    <img class="empty-icon" src="/assets/logo-white.svg" alt="" />
     <p>Ask a question about the sermons</p>
   </div>
 </div>
