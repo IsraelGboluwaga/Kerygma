@@ -255,29 +255,32 @@ What has Apostle Emmanuel Iren said about healing?
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
+| `OPENAI_API_KEY` | Yes | — | OpenAI API key (used for Whisper transcription) |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
-| `MINISTRY_NAME` | Yes | `the church` | Ministry name shown in the UI and AI prompts |
+| `SERMON_BASE_URL` | Yes | — | Base URL for the sermon REST API and audio files |
+| `MINISTRY_NAME` | No | `the church` | Ministry name shown in the UI and AI prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
-| `WHISPER_MODEL` | No | `medium.en` | Whisper model name |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
-| `SERMON_BASE_URL` | No | — | Base URL prepended to sermon audio paths (e.g. `https://sermons.example.com`) |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chat synthesis |
+| `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
 
 ---
 
 ## Database Schema
 
 ```sql
-sermons (id, video_id, title, date, download_url, webpage_url, speaker, series,
-         duration, tags, ingestion_status, transcription, created_at)
-chunks  (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
-chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
+sermons        (id, video_id, title, date, download_url, webpage_url, speaker, series,
+                description, duration, tags, ingestion_status, transcription, created_at)
+transcriptions (id, sermon_id, transcript, segments, created_at)
+chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
+chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 ```
 
-`video_id` is `SHA256(downloadUrl).slice(0, 16)` — duplicate detection is URL-based.
-`series` is stored as `Series Name-YYYY` (e.g. `Faith Foundations-2024`), derived from the series input and the sermon date.
-`ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete. Partial records enable retry resume without re-downloading.
+`video_id` comes from the sermon API's `_id` field, or falls back to `SHA256(downloadUrl).slice(0, 16)` for manually-ingested URLs.
+`series` is stored as `Series Name-YYYY` (e.g. `Faith Foundations-2024`).
+`ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete.
+`transcriptions` stores the full plain-text transcript and JSON segment array separately from `sermons` to keep sermon queries fast.
 
 ---
 

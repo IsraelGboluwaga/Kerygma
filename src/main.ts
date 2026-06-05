@@ -10,6 +10,7 @@ import { createMcpServer } from './mcp/server.js'
 import { createRouter } from './web/router.js'
 import { waitUntilIdle } from './queue.js'
 import { failStaleJobs } from './db/queries.js'
+import { startScheduler } from './scheduler.js'
 
 async function main() {
   logger.info('Starting up...')
@@ -63,6 +64,8 @@ async function main() {
     logger.info(`Admin UI:     http://localhost:${config.PORT}/admin`)
     logger.info(`MCP endpoint: http://localhost:${config.PORT}/mcp`)
   })
+
+  startScheduler(anthropic)
 
   // 3. Warm up embedding model in background — server is already accepting requests.
   //    Ingestion jobs that need the embedder will await it naturally via getEmbedder().

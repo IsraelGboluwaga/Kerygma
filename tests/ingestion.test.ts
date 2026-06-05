@@ -66,7 +66,7 @@ beforeEach(() => {
   // Default happy-path mocks
   const cleanup = vi.fn()
   mockDownload.mockResolvedValue({ filePath: '/tmp/test.mp3', cleanup })
-  mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 300 })
+  mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 300, transcript: 'Hello church. Let us pray.' })
   mockChunk.mockResolvedValue(fakeChunks)
 })
 
@@ -109,7 +109,7 @@ describe('ingestSermon — duplicate detection', () => {
 describe('ingestSermon — duration limit', () => {
   it('returns status too_long when duration exceeds limit', async () => {
     // Default MAX_AUDIO_DURATION_SECONDS is 7200
-    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7201 })
+    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7201, transcript: '' })
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('too_long')
     expect(result.message).toContain('exceeds')
@@ -118,13 +118,13 @@ describe('ingestSermon — duration limit', () => {
   it('calls cleanup even when too long', async () => {
     const cleanup = vi.fn()
     mockDownload.mockResolvedValue({ filePath: '/tmp/test.mp3', cleanup })
-    mockTranscribe.mockResolvedValue({ segments: [], duration: 9999 })
+    mockTranscribe.mockResolvedValue({ segments: [], duration: 9999, transcript: '' })
     await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(cleanup).toHaveBeenCalledOnce()
   })
 
   it('passes at exact duration limit', async () => {
-    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7200 })
+    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7200, transcript: 'Hello church. Let us pray.' })
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('ok')
   })
@@ -141,10 +141,10 @@ describe('ingestSermon — error paths', () => {
   it('returns status error when transcription fails', async () => {
     const cleanup = vi.fn()
     mockDownload.mockResolvedValue({ filePath: '/tmp/test.mp3', cleanup })
-    mockTranscribe.mockRejectedValue(new Error('Whisper crashed'))
+    mockTranscribe.mockRejectedValue(new Error('OpenAI API error'))
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('error')
-    expect(result.message).toContain('Whisper crashed')
+    expect(result.message).toContain('OpenAI API error')
     expect(cleanup).toHaveBeenCalledOnce()
   })
 
@@ -166,11 +166,23 @@ describe('ingestSermon — retry resume', () => {
     expect(first.status).toBe('error')
     expect(mockDownload).toHaveBeenCalledTimes(1)
 
-    // Second attempt: chunking succeeds — no re-download
+    // Second attempt: chunking succeeds — no re-download, reads from transcriptions table
     mockChunk.mockResolvedValueOnce(fakeChunks)
     const second = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(second.status).toBe('ok')
     expect(mockDownload).toHaveBeenCalledTimes(1) // still only once
+    expect(mockTranscribe).toHaveBeenCalledTimes(1) // transcription not repeated
+  })
+
+  it('uses videoId from request when provided', async () => {
+    const reqWithId: IngestRequest = { ...baseRequest, videoId: 'custom-id-abc123' }
+    const result = await ingestSermon(reqWithId, fakeAnthropicClient)
+    expect(result.status).toBe('ok')
+
+    // Same videoId, different URL → detected as duplicate
+    const dup = await ingestSermon({ ...reqWithId, downloadUrl: 'https://other.com/sermon.mp3' }, fakeAnthropicClient)
+    expect(dup.status).toBe('duplicate')
+    expect(mockDownload).toHaveBeenCalledTimes(1)
   })
 })
 
