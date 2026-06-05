@@ -25,6 +25,7 @@ interface ApiSermon {
   theme?: ApiTheme | null
   tags?: string[] | ApiTag[]
   description_string?: string
+  youtube_link?: string | null
   slug?: string
 }
 
@@ -56,6 +57,7 @@ function mapToIngestRequest(sermon: ApiSermon): IngestRequest {
   return {
     videoId: sermon._id,
     downloadUrl,
+    webpageUrl: sermon.youtube_link || undefined,
     title: sermon.title,
     speaker: sermon.preacher,
     date: sermon.sermon_date.slice(0, 10),  // YYYY-MM-DD

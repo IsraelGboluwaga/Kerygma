@@ -172,4 +172,24 @@ describe('fetchAllSermons', () => {
 
     expect((results[0] as Record<string, string>).date).toBe('2024-12-25')
   })
+
+  it('maps youtube_link to webpageUrl', async () => {
+    const sermon = { ...baseSermon, youtube_link: 'https://youtube.com/watch?v=abc123' }
+    mockFetch.mockResolvedValue(mockOkResponse(makeApiResponse([sermon])))
+
+    const results: object[] = []
+    for await (const req of fetchAllSermons()) results.push(req)
+
+    expect((results[0] as Record<string, string>).webpageUrl).toBe('https://youtube.com/watch?v=abc123')
+  })
+
+  it('omits webpageUrl when youtube_link is null', async () => {
+    const sermon = { ...baseSermon, youtube_link: null }
+    mockFetch.mockResolvedValue(mockOkResponse(makeApiResponse([sermon])))
+
+    const results: object[] = []
+    for await (const req of fetchAllSermons()) results.push(req)
+
+    expect((results[0] as Record<string, unknown>).webpageUrl).toBeUndefined()
+  })
 })
