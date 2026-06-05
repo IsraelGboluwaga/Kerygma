@@ -230,6 +230,7 @@ If the excerpts don't contain enough information to answer, say so.`,
         .enum(['brief', 'comprehensive'])
         .describe('Type of summary: "brief" (3-5 key points) or "comprehensive" (full breakdown)'),
     },
+    // @ts-expect-error — TS2589: handler return type inference too deep
     async ({ date, speaker, summary_type }: { date: string; speaker?: string; summary_type: 'brief' | 'comprehensive' }) => {
       let resolvedSpeaker: string | undefined
       if (speaker) {
