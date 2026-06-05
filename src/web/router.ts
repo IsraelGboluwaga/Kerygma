@@ -169,6 +169,10 @@ export function createRouter(anthropic: Anthropic): Hono {
       return c.json({ error: 'series must be a string' }, 400)
     }
 
+    if (getQueueDepth() >= MAX_QUEUE_DEPTH) {
+      return c.json({ error: 'Queue is full, try again later' }, 503)
+    }
+
     const jobId = enqueue(() => ingestSermon(req, anthropic), {
       title: req.title,
       downloadUrl: req.downloadUrl,
