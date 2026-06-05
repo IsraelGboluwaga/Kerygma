@@ -58,6 +58,7 @@ Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md
 | `WHISPER_MODEL` | No | `medium.en` | Must match the model compiled into the Docker image |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
 | `LOG_LEVEL` | No | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
+| `SERMON_BASE_URL` | No | — | Base URL prepended to sermon audio paths (e.g. `https://sermons.example.com`) |
 
 Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` + `ADMIN_SECRET` before running.
 

@@ -262,6 +262,7 @@ What has Apostle Emmanuel Iren said about healing?
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
 | `WHISPER_MODEL` | No | `medium.en` | Whisper model name |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
+| `SERMON_BASE_URL` | No | — | Base URL prepended to sermon audio paths (e.g. `https://sermons.example.com`) |
 
 ---
 
