@@ -60,6 +60,10 @@ Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
 | `LOG_LEVEL` | No | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
+| `R2_ACCOUNT_ID` | No | — | Cloudflare account ID; required for Litestream R2 replication |
+| `R2_ACCESS_KEY_ID` | No | — | R2 access key ID; required for Litestream R2 replication |
+| `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key; required for Litestream R2 replication |
+| `R2_BUCKET` | No | — | R2 bucket name; replication is skipped entirely if any R2 var is unset |
 
 Copy `.env.example` to `.env` and fill in the required variables before running.
 

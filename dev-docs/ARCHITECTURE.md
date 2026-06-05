@@ -369,3 +369,50 @@ Stage 2 — runtime (node:20-slim, same Debian Bookworm)
 Both stages use the same Debian Bookworm base so compiled `.node` binaries are portable between them (same glibc ABI).
 
 **Layer caching:** `apt-get` and `yarn install` layers are cached until `yarn.lock` changes. Code changes only invalidate the final `COPY . .` + `yarn build` layers, making rebuilds fast.
+
+---
+
+## Database Backup (Litestream + R2)
+
+When the four R2 environment variables are set (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`), the container starts under Litestream instead of running Node directly.
+
+### How it works
+
+```
+Container start (with R2 vars set)
+    │
+    docker-entrypoint.sh
+    │
+    litestream replicate -config litestream.yml -exec "node dist/main.js"
+    │
+    ├── 1. Restore — downloads the latest snapshot + WAL frames from R2 to $DB_PATH
+    │             (no-op on first boot if the bucket is empty)
+    │
+    ├── 2. Node starts — app opens the restored SQLite file normally
+    │
+    └── 3. Continuous replication — Litestream monitors the WAL and streams changes
+              to R2 in near-real-time while Node is running
+              (target checkpoint interval: 1 s)
+
+Container stop / crash
+    └── Litestream flushes remaining WAL frames before exiting;
+        next cold start restores from where replication left off
+```
+
+### Graceful degradation
+
+`docker-entrypoint.sh` checks all four R2 vars at runtime. If any is absent, it falls back to `node dist/main.js` directly — Litestream is never invoked and the app starts normally. This means local development and staging environments without R2 credentials work identically to before.
+
+### Config file
+
+`litestream.yml` at the repo root uses env-var substitution (`${VAR}`) so no credentials are baked into the image. The replica path inside the bucket is `sermons/`.
+
+### Recovery procedure
+
+To restore a database manually (e.g. migrating to a new Railway project):
+
+```bash
+litestream restore -config litestream.yml $DB_PATH
+```
+
+Litestream downloads the latest snapshot and applies all subsequent WAL frames, producing a consistent SQLite file.
