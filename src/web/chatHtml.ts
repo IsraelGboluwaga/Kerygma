@@ -233,7 +233,7 @@ export function chatHtml(): string {
 
 <header>
   <div>
-    <img class="header-logo" src="/assets/logo-mark.svg" alt="${ministry}" />
+    <img class="header-logo" src="/assets/cci_logo.svg" alt="${ministry}" />
     <div class="subtitle">Sermon library</div>
   </div>
   <button class="new-btn" id="new-btn">New conversation</button>
@@ -241,7 +241,7 @@ export function chatHtml(): string {
 
 <div id="messages">
   <div id="empty-state">
-    <img class="empty-icon" src="/assets/logo-mark.svg" alt="" />
+    <img class="empty-icon" src="/assets/cci_logo.svg" alt="" />
     <p>Ask a question about the sermons</p>
   </div>
 </div>

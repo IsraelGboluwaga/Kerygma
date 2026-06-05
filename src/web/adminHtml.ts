@@ -117,7 +117,7 @@ export function adminHtml(): string {
 <body>
 
 <div class="top-bar">
-  <img class="top-bar-logo" src="/assets/logo-mark.svg" alt="${ministry}" />
+  <img class="top-bar-logo" src="/assets/cci_logo.svg" alt="${ministry}" />
   <div class="top-bar-divider"></div>
   <div class="subtitle">Sermon ingestion</div>
 </div>
