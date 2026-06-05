@@ -30,8 +30,8 @@ export function chatHtml(): string {
       justify-content: space-between;
       flex-shrink: 0;
     }
-    .header-logo { height: 28px; width: auto; display: block; }
-    .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; }
+    .header-logo { height: 28px; width: auto; display: block; margin: 0 auto; }
+    .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; }
 
     .new-btn {
       background: none;
