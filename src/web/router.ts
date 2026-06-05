@@ -1,6 +1,9 @@
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import type Anthropic from '@anthropic-ai/sdk'
+import { readFileSync } from 'fs'
+import { join, extname } from 'path'
+import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { enqueue, getJob, getRecentJobs, getQueueDepth } from '../queue.js'
 import { ingestSermon, type IngestRequest } from '../ingestion/pipeline.js'
@@ -10,6 +13,17 @@ import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
 import { adminHtml } from './adminHtml.js'
 import { chatHtml } from './chatHtml.js'
+
+const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
+
+const MIME: Record<string, string> = {
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+}
 
 // Simple in-memory rate limiter: 30 requests/min per IP on the chat endpoint
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
@@ -32,6 +46,18 @@ const MAX_QUEUE_DEPTH = 50
 
 export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
+
+  // ── Static assets ──────────────────────────────────────────────────────
+  app.get('/assets/:file', (c) => {
+    const file = c.req.param('file')
+    try {
+      const data = readFileSync(join(ASSETS_DIR, file))
+      const mime = MIME[extname(file)] ?? 'application/octet-stream'
+      return new Response(data, { headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' } })
+    } catch {
+      return c.notFound()
+    }
+  })
 
   // ── Health ─────────────────────────────────────────────────────────────
   app.get('/health', (c) => c.json({ ok: true }))

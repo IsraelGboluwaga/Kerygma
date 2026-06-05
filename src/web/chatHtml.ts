@@ -14,37 +14,42 @@ export function chatHtml(): string {
 
     body {
       font-family: system-ui, -apple-system, sans-serif;
-      background: #f5f5f5;
-      color: #1a1a1a;
+      background: #000;
+      color: #fff;
       height: 100dvh;
       display: flex;
       flex-direction: column;
     }
 
     header {
-      background: white;
-      border-bottom: 1px solid #e5e7eb;
+      background: #000;
+      border-bottom: 1px solid #1f1f1f;
       padding: 0.75rem 1.5rem;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-shrink: 0;
     }
-    header h1 { font-size: 1.1rem; font-weight: 600; }
-    .subtitle { font-size: 0.8rem; color: #6b7280; }
+    .header-logo {
+      height: 28px;
+      width: auto;
+      display: block;
+    }
+    .subtitle { font-size: 0.78rem; color: #666; margin-top: 0.2rem; letter-spacing: 0.04em; text-transform: uppercase; }
 
     .new-btn {
       background: none;
-      border: 1px solid #d1d5db;
+      border: 1px solid #333;
       border-radius: 6px;
       padding: 0.35rem 0.8rem;
       font-size: 0.82rem;
       cursor: pointer;
-      color: #374151;
+      color: #aaa;
       font-family: inherit;
-      transition: background 0.15s;
+      letter-spacing: 0.03em;
+      transition: border-color 0.15s, color 0.15s;
     }
-    .new-btn:hover { background: #f3f4f6; }
+    .new-btn:hover { border-color: #cc0000; color: #fff; }
 
     #messages {
       flex: 1;
@@ -54,6 +59,9 @@ export function chatHtml(): string {
       flex-direction: column;
       gap: 1.25rem;
     }
+    #messages::-webkit-scrollbar { width: 4px; }
+    #messages::-webkit-scrollbar-track { background: transparent; }
+    #messages::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
 
     #empty-state {
       flex: 1;
@@ -61,12 +69,17 @@ export function chatHtml(): string {
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 0.5rem;
-      color: #9ca3af;
+      gap: 0.6rem;
+      color: #444;
       text-align: center;
     }
-    .empty-icon { font-size: 2.5rem; margin-bottom: 0.25rem; }
-    #empty-state p { font-size: 0.9rem; }
+    .empty-icon {
+      width: 48px;
+      height: 48px;
+      opacity: 0.25;
+      margin-bottom: 0.25rem;
+    }
+    #empty-state p { font-size: 0.88rem; letter-spacing: 0.03em; color: #555; }
 
     .msg-row {
       display: flex;
@@ -84,14 +97,15 @@ export function chatHtml(): string {
       word-break: break-word;
     }
     .user .bubble {
-      background: #4f46e5;
-      color: white;
+      background: #cc0000;
+      color: #fff;
       border-bottom-right-radius: 4px;
       white-space: pre-wrap;
     }
     .assistant .bubble {
-      background: white;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      background: #111;
+      color: #e5e5e5;
+      border: 1px solid #1f1f1f;
       border-bottom-left-radius: 4px;
     }
     .assistant .bubble p { margin-bottom: 0.6rem; }
@@ -99,24 +113,24 @@ export function chatHtml(): string {
     .assistant .bubble ul,
     .assistant .bubble ol { padding-left: 1.4rem; margin-bottom: 0.6rem; }
     .assistant .bubble li { margin-bottom: 0.2rem; }
-    .assistant .bubble strong { font-weight: 600; }
+    .assistant .bubble strong { font-weight: 600; color: #fff; }
     .assistant .bubble h1,
     .assistant .bubble h2,
-    .assistant .bubble h3 { font-weight: 600; margin: 0.6rem 0 0.3rem; }
+    .assistant .bubble h3 { font-weight: 600; color: #fff; margin: 0.6rem 0 0.3rem; }
 
     .dots-wrap {
       display: flex;
       gap: 4px;
       align-items: center;
       padding: 0.8rem 1rem;
-      background: white;
+      background: #111;
+      border: 1px solid #1f1f1f;
       border-radius: 14px;
       border-bottom-left-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
     .dot {
       width: 6px; height: 6px;
-      background: #9ca3af;
+      background: #444;
       border-radius: 50%;
       animation: bounce 1.1s ease-in-out infinite;
     }
@@ -132,14 +146,16 @@ export function chatHtml(): string {
       font-size: 0.78rem;
     }
     details.sources > summary {
-      color: #6b7280;
+      color: #555;
       cursor: pointer;
       list-style: none;
       user-select: none;
       display: flex;
       align-items: center;
       gap: 0.3rem;
+      transition: color 0.15s;
     }
+    details.sources > summary:hover { color: #aaa; }
     details.sources > summary::marker,
     details.sources > summary::-webkit-details-marker { display: none; }
     details.sources > summary::before       { content: '▶'; font-size: 0.6rem; }
@@ -147,7 +163,7 @@ export function chatHtml(): string {
     details.sources ul {
       margin-top: 0.35rem;
       padding-left: 1.1rem;
-      color: #6b7280;
+      color: #555;
       list-style: disc;
       display: flex;
       flex-direction: column;
@@ -155,8 +171,8 @@ export function chatHtml(): string {
     }
 
     #input-area {
-      background: white;
-      border-top: 1px solid #e5e7eb;
+      background: #000;
+      border-top: 1px solid #1f1f1f;
       padding: 0.9rem 1rem;
       flex-shrink: 0;
     }
@@ -169,8 +185,9 @@ export function chatHtml(): string {
     }
     #error-msg {
       padding: 0.5rem 0.8rem;
-      background: #fee2e2;
-      color: #991b1b;
+      background: #1a0000;
+      color: #ff6666;
+      border: 1px solid #440000;
       border-radius: 6px;
       font-size: 0.83rem;
       display: none;
@@ -183,8 +200,10 @@ export function chatHtml(): string {
     #input {
       flex: 1;
       padding: 0.65rem 0.85rem;
-      border: 1px solid #d1d5db;
+      border: 1px solid #2a2a2a;
       border-radius: 8px;
+      background: #0d0d0d;
+      color: #fff;
       font-size: 0.93rem;
       font-family: inherit;
       resize: none;
@@ -193,12 +212,13 @@ export function chatHtml(): string {
       overflow-y: auto;
       transition: border-color 0.15s;
     }
-    #input:focus   { outline: none; border-color: #4f46e5; }
-    #input:disabled { background: #f9fafb; color: #9ca3af; }
+    #input::placeholder { color: #444; }
+    #input:focus   { outline: none; border-color: #cc0000; }
+    #input:disabled { background: #0a0a0a; color: #333; }
 
     #send-btn {
-      background: #4f46e5;
-      color: white;
+      background: #cc0000;
+      color: #fff;
       border: none;
       border-radius: 8px;
       padding: 0.65rem 1.1rem;
@@ -206,25 +226,26 @@ export function chatHtml(): string {
       font-family: inherit;
       cursor: pointer;
       flex-shrink: 0;
+      letter-spacing: 0.03em;
       transition: background 0.15s;
     }
-    #send-btn:hover:not(:disabled) { background: #4338ca; }
-    #send-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+    #send-btn:hover:not(:disabled) { background: #aa0000; }
+    #send-btn:disabled { background: #550000; color: #884444; cursor: not-allowed; }
   </style>
 </head>
 <body>
 
 <header>
   <div>
-    <h1>${ministry}</h1>
-    <div class="subtitle">Ask questions about our sermons</div>
+    <img class="header-logo" src="/assets/logo-main.svg" alt="${ministry}" />
+    <div class="subtitle">Sermon library</div>
   </div>
   <button class="new-btn" id="new-btn">New conversation</button>
 </header>
 
 <div id="messages">
   <div id="empty-state">
-    <div class="empty-icon">&#10011;</div>
+    <img class="empty-icon" src="/assets/logo-white.svg" alt="" />
     <p>Ask a question about the sermons</p>
   </div>
 </div>
