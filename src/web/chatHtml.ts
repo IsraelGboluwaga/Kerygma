@@ -49,7 +49,7 @@ export function chatHtml(): string {
       letter-spacing: 0.03em;
       transition: border-color 0.15s, color 0.15s;
     }
-    .new-btn:hover { border-color: #cc0000; color: #fff; }
+    .new-btn:hover { border-color: #df4e4e; color: #fff; }
 
     #messages {
       flex: 1;
@@ -97,7 +97,7 @@ export function chatHtml(): string {
       word-break: break-word;
     }
     .user .bubble {
-      background: #cc0000;
+      background: #df4e4e;
       color: #fff;
       border-bottom-right-radius: 4px;
       white-space: pre-wrap;
@@ -185,9 +185,9 @@ export function chatHtml(): string {
     }
     #error-msg {
       padding: 0.5rem 0.8rem;
-      background: #1a0000;
-      color: #ff6666;
-      border: 1px solid #440000;
+      background: #1c0e0e;
+      color: #ef8888;
+      border: 1px solid #5a2222;
       border-radius: 6px;
       font-size: 0.83rem;
       display: none;
@@ -213,11 +213,11 @@ export function chatHtml(): string {
       transition: border-color 0.15s;
     }
     #input::placeholder { color: #444; }
-    #input:focus   { outline: none; border-color: #cc0000; }
+    #input:focus   { outline: none; border-color: #df4e4e; }
     #input:disabled { background: #0a0a0a; color: #333; }
 
     #send-btn {
-      background: #cc0000;
+      background: #df4e4e;
       color: #fff;
       border: none;
       border-radius: 8px;
@@ -229,8 +229,8 @@ export function chatHtml(): string {
       letter-spacing: 0.03em;
       transition: background 0.15s;
     }
-    #send-btn:hover:not(:disabled) { background: #aa0000; }
-    #send-btn:disabled { background: #550000; color: #884444; cursor: not-allowed; }
+    #send-btn:hover:not(:disabled) { background: #c93c3c; }
+    #send-btn:disabled { background: #5a2222; color: #8a5555; cursor: not-allowed; }
   </style>
 </head>
 <body>
