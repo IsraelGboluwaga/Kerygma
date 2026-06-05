@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // vi.hoisted ensures these are available inside vi.mock factories
-const { mockCreate, mockCreateReadStream } = vi.hoisted(() => ({
+const { mockCreate, mockCreateReadStream, mockStatSync } = vi.hoisted(() => ({
   mockCreate: vi.fn(),
   mockCreateReadStream: vi.fn(),
+  mockStatSync: vi.fn(),
 }))
 
 // Use a regular function (not arrow) so `new OpenAI()` works
@@ -17,8 +18,9 @@ vi.mock('openai', () => {
 })
 
 vi.mock('node:fs', () => ({
-  default: { createReadStream: mockCreateReadStream },
+  default: { createReadStream: mockCreateReadStream, statSync: mockStatSync },
   createReadStream: mockCreateReadStream,
+  statSync: mockStatSync,
 }))
 
 import { transcribeAudio } from '../src/ingestion/transcriber.js'
@@ -45,6 +47,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockCreate.mockResolvedValue(fakeVerboseResponse)
   mockCreateReadStream.mockReturnValue({ pipe: vi.fn() })
+  // Default: file is under the 25 MB limit
+  mockStatSync.mockReturnValue({ size: 10 * 1024 * 1024 } as ReturnType<typeof import('node:fs').statSync>)
 })
 
 describe('transcribeAudio', () => {
@@ -80,16 +84,29 @@ describe('transcribeAudio', () => {
     expect(result.duration).toBe(0)
   })
 
-  it('uses whisper-1 model and verbose_json format', async () => {
+  it('uses whisper-1 model, verbose_json format, and explicit timeout', async () => {
     await transcribeAudio('/tmp/test.mp3')
     expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'whisper-1', response_format: 'verbose_json' })
+      expect.objectContaining({ model: 'whisper-1', response_format: 'verbose_json' }),
+      expect.objectContaining({ timeout: expect.any(Number) })
     )
   })
 
   it('creates a read stream for the given file path', async () => {
     await transcribeAudio('/tmp/sermon.mp3')
     expect(mockCreateReadStream).toHaveBeenCalledWith('/tmp/sermon.mp3')
+  })
+
+  it('throws a clear error when file exceeds the 25 MB Whisper API limit', async () => {
+    mockStatSync.mockReturnValue({ size: 26 * 1024 * 1024 } as ReturnType<typeof import('node:fs').statSync>)
+    await expect(transcribeAudio('/tmp/large.mp3')).rejects.toThrow('25 MB')
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
+  it('passes through files exactly at the limit', async () => {
+    mockStatSync.mockReturnValue({ size: 25 * 1024 * 1024 } as ReturnType<typeof import('node:fs').statSync>)
+    const result = await transcribeAudio('/tmp/test.mp3')
+    expect(result.transcript).toBeDefined()
   })
 
   it('trims whitespace from segment text', async () => {
