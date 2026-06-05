@@ -156,6 +156,10 @@ export function getRecentJobs(limit = 50): Job[] {
   }
 }
 
+export function getQueueDepth(): number {
+  return queue.length
+}
+
 /** Resolves once no job is actively running. Used for graceful shutdown. */
 export async function waitUntilIdle(): Promise<void> {
   while (running) {

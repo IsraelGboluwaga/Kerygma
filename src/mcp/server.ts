@@ -105,7 +105,6 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   })
 
   // ── Tool 1: list_sermons ───────────────────────────────────────────────
-  // @ts-expect-error — TS2589: MCP SDK Zod schema generics exceed instantiation depth limit
   server.tool(
     'list_sermons',
     'List recently indexed sermons.',
@@ -137,7 +136,6 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   )
 
   // ── Tool 2: ask_church ─────────────────────────────────────────────────
-  // @ts-expect-error — TS2589: MCP SDK Zod schema generics exceed instantiation depth limit
   server.tool(
     'ask_church',
     'Answer a specific question using teachings from indexed sermons. Supports filtering by date and/or speaker.',
