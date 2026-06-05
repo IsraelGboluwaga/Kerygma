@@ -105,7 +105,7 @@ Claude is called with:
 - On `done` — pushes the completed assistant message to the `messages` array for future turns
 - On `error` — removes the typing indicator and shows an error banner
 
-Sources appear as a collapsible `<details>` element below the response bubble, showing sermon title, date, and timestamp for each matched chunk.
+Sources appear as a collapsible `<details>` element below the response bubble, showing sermon title, date, and timestamp for each matched chunk. The `section_name` from the chunk is not surfaced in the Sources widget — only the sermon-level metadata is shown.
 
 ---
 
@@ -125,12 +125,25 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 
 ---
 
+## Limits and Defaults
+
+| Parameter | Value | Where set |
+|-----------|-------|-----------|
+| Chunks retrieved per chat turn | 10 | `router.ts` → `searchChunks(query, 10)` |
+| Max tokens per Claude response | 2048 | `router.ts` → `max_tokens: 2048` |
+| Claude model | `claude-sonnet-4-20250514` (overridable) | `config.ts` → `CLAUDE_MODEL` |
+
+Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because it groups results by sermon and presents them structured rather than as a synthesised narrative.
+
+---
+
 ## Key Files
 
 | File | Role |
 |------|------|
 | `src/web/chatHtml.ts` | Frontend UI, SSE parsing, message rendering |
-| `src/web/router.ts` | POST `/` handler, search, context building, Claude streaming |
+| `src/web/router.ts` | `POST /` handler, search, context building, Claude streaming |
 | `src/db/queries.ts` | `searchChunks()`, `sanitizeFtsQuery()`, FTS5 query |
 | `src/ingestion/chunker.ts` | `formatTimestamp()` used in context headers |
+| `src/logger.ts` | Runtime logging (Winston) |
 | `src/config.ts` | `MINISTRY_NAME`, `CLAUDE_MODEL` |

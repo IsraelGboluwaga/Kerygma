@@ -66,8 +66,11 @@ McpServer — 4 read-only tools
 ```
 kerygma/
 ├── src/
-│   ├── config.ts                  # Zod env validation
-│   ├── queue.ts                   # In-process FIFO job queue
+│   ├── config.ts                  # Zod env validation; crashes on startup if required vars missing
+│   ├── logger.ts                  # Winston logger (colourised in dev, plain in production)
+│   ├── retry.ts                   # withRetry() — exponential backoff for Anthropic API calls
+│   ├── utils.ts                   # errMsg() — safe error-to-string extraction
+│   ├── queue.ts                   # In-process FIFO job queue (persisted to jobs table)
 │   ├── main.ts                    # Entry: initDb → loadEmbedder → serve
 │   ├── db/
 │   │   ├── schema.ts              # DDL + FTS5 triggers + migration shims
@@ -76,15 +79,15 @@ kerygma/
 │   ├── ingestion/
 │   │   ├── downloader.ts          # HTTP MP3 → temp file
 │   │   ├── transcriber.ts         # nodejs-whisper → TranscriptSegment[]
-│   │   ├── chunker.ts             # Claude chunking + validateChunks
-│   │   ├── embedder.ts            # @xenova/transformers singleton
+│   │   ├── chunker.ts             # Claude chunking + validateChunks + formatTimestamp
+│   │   ├── embedder.ts            # @xenova/transformers singleton (all-MiniLM-L6-v2)
 │   │   └── pipeline.ts            # Orchestrates full ingest (with retry resume)
 │   ├── mcp/
 │   │   └── server.ts              # 4 MCP tool registrations
 │   └── web/
-│       ├── router.ts              # Hono app
-│       ├── adminHtml.ts           # Admin form HTML
-│       └── chatHtml.ts            # Streaming chat UI
+│       ├── router.ts              # Hono app — chat, admin, and health routes
+│       ├── adminHtml.ts           # Admin form HTML (password-gated, live job polling)
+│       └── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
 ├── tests/
 │   ├── setup.ts                   # Env vars for test context
 │   ├── db.test.ts                 # Storage layer (26 tests)
@@ -92,11 +95,13 @@ kerygma/
 │   ├── ingestion.test.ts          # Pipeline tests, mocked (12 tests)
 │   └── queue.test.ts              # Queue behaviour (8 tests)
 ├── data/
-│   └── sermons.db                 # SQLite database (created at runtime)
+│   └── sermons.db                 # SQLite database (created at runtime, gitignored)
+├── dev-docs/
+│   ├── ARCHITECTURE.md            # Detailed technical architecture and data flows
+│   └── CHAT.md                    # Chat feature deep-dive
 ├── Dockerfile
 ├── .dockerignore
-├── ARCHITECTURE.md
-├── mcpConnect.md
+├── mcpConnect.md                  # MCP connection guide (Claude Desktop + deployed)
 ├── package.json
 ├── tsconfig.json
 ├── railway.json
@@ -278,11 +283,13 @@ chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
 ## Development
 
 ```bash
-yarn dev          # run with tsx (needs cmake + ffmpeg + whisper model on host)
-yarn build        # tsc → dist/
-yarn start        # node dist/main.js
-yarn test         # vitest — 58 tests
-yarn typecheck    # tsc --noEmit
+yarn dev            # run with tsx watch (needs cmake + ffmpeg + whisper model on host)
+yarn build          # tsc → dist/
+yarn start          # node dist/main.js
+yarn test           # vitest run — 58 tests
+yarn test:watch     # vitest in watch mode
+yarn test:coverage  # vitest with v8 coverage report
+yarn typecheck      # tsc --noEmit
 ```
 
 For iterating on code without rebuilding the full Docker image, `yarn dev` is faster — but you need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`).
