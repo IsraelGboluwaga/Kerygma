@@ -105,12 +105,11 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   })
 
   // ── Tool 1: list_sermons ───────────────────────────────────────────────
-  // @ts-ignore — TS2589: MCP SDK Zod schema generics exceed instantiation depth limit
   server.tool(
     'list_sermons',
     'List recently indexed sermons.',
     { limit: z.number().int().positive().default(20).describe('Max sermons to return') },
-    // @ts-ignore — TS2589: handler return type inference too deep
+    // @ts-expect-error — TS2589: handler return type inference too deep
     async ({ limit }: { limit: number }) => {
       const rows = listSermons(limit)
 
@@ -137,7 +136,6 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   )
 
   // ── Tool 2: ask_church ─────────────────────────────────────────────────
-  // @ts-ignore — TS2589: MCP SDK Zod schema generics exceed instantiation depth limit
   server.tool(
     'ask_church',
     'Answer a specific question using teachings from indexed sermons. Supports filtering by date and/or speaker.',
@@ -152,7 +150,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
         .optional()
         .describe('Optional speaker name or partial name to filter by'),
     },
-    // @ts-ignore — TS2589: handler return type inference too deep
+    // @ts-expect-error — TS2589: handler return type inference too deep
     async ({ question, date_filter, speaker_filter }: { question: string; date_filter?: string; speaker_filter?: string }) => {
       let resolvedSpeaker: string | undefined
       if (speaker_filter) {

@@ -54,7 +54,7 @@ export async function chunkSermon(
   const formatted = prepareTranscriptForChunking(segments)
 
   const response = await withRetry(() => anthropic.messages.create({
-    model: config.CLAUDE_MODEL,
+    model: config.CHUNKING_MODEL,
     max_tokens: 4096,
     messages: [
       {

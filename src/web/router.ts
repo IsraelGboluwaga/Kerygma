@@ -2,13 +2,33 @@ import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import type Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
-import { enqueue, getJob, getRecentJobs } from '../queue.js'
+import { enqueue, getJob, getRecentJobs, getQueueDepth } from '../queue.js'
 import { ingestSermon, type IngestRequest } from '../ingestion/pipeline.js'
 import { searchChunks } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
+import { logger } from '../logger.js'
 import { adminHtml } from './adminHtml.js'
 import { chatHtml } from './chatHtml.js'
+
+// Simple in-memory rate limiter: 30 requests/min per IP on the chat endpoint
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
+const RATE_LIMIT = 30
+const RATE_WINDOW_MS = 60_000
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now()
+  const entry = rateLimitMap.get(ip)
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS })
+    return true
+  }
+  if (entry.count >= RATE_LIMIT) return false
+  entry.count++
+  return true
+}
+
+const MAX_QUEUE_DEPTH = 50
 
 export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
@@ -20,6 +40,11 @@ export function createRouter(anthropic: Anthropic): Hono {
   app.get('/', (c) => c.html(chatHtml()))
 
   app.post('/', async (c) => {
+    const ip = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip') ?? 'unknown'
+    if (!checkRateLimit(ip)) {
+      return c.json({ error: 'Too many requests' }, 429)
+    }
+
     let body: { messages: Array<{ role: 'user' | 'assistant'; content: string }> }
     try {
       body = await c.req.json()
@@ -102,7 +127,8 @@ export function createRouter(anthropic: Anthropic): Hono {
 
         await s.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
       } catch (err) {
-        await s.write(`data: ${JSON.stringify({ type: 'error', message: errMsg(err) })}\n\n`)
+        logger.error(`Chat stream error: ${errMsg(err)}`)
+        await s.write(`data: ${JSON.stringify({ type: 'error', message: 'An error occurred. Please try again.' })}\n\n`)
       }
     })
   })
@@ -141,6 +167,10 @@ export function createRouter(anthropic: Anthropic): Hono {
     }
     if (req.series && typeof req.series !== 'string') {
       return c.json({ error: 'series must be a string' }, 400)
+    }
+
+    if (getQueueDepth() >= MAX_QUEUE_DEPTH) {
+      return c.json({ error: 'Queue is full, try again later' }, 503)
     }
 
     const jobId = enqueue(() => ingestSermon(req, anthropic), {

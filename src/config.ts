@@ -10,6 +10,7 @@ const envSchema = z.object({
   MAX_AUDIO_DURATION_SECONDS: z.coerce.number().int().positive().default(7200),
   WHISPER_MODEL: z.string().default('medium.en'),
   CLAUDE_MODEL: z.string().default('claude-sonnet-4-20250514'),
+  CHUNKING_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 })
 
 const parsed = envSchema.safeParse(process.env)

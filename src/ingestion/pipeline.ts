@@ -7,7 +7,7 @@ import { logger } from '../logger.js'
 import { errMsg } from '../utils.js'
 import {
   getSermonByVideoId,
-  saveSermon,
+
   insertPartialSermon,
   completeSermon,
   saveChunks,

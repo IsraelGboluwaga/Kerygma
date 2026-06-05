@@ -25,6 +25,9 @@ interface WhisperOutput {
   transcription: WhisperSegment[]
 }
 
+// TODO: replace with OpenAI Whisper API (api.openai.com/v1/audio/transcriptions)
+// local nodejs-whisper runs at 0.5–1.5× realtime on CPU; API completes in minutes
+// cost: ~$0.006/min of audio (~$169 for 468 × 60-min sermons)
 export async function transcribeAudio(
   filePath: string,
 ): Promise<TranscribeResult> {
