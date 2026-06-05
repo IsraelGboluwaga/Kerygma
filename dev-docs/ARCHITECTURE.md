@@ -51,6 +51,19 @@ process crashes with a clear error before doing anything else. Exports a frozen 
 
 Key variables: `ANTHROPIC_API_KEY`, `ADMIN_SECRET`, `MINISTRY_NAME` (used in UI titles and AI system prompts), `WHISPER_MODEL` (must match the model baked into the Docker image).
 
+### `src/logger.ts`
+Winston-based logger exported as a singleton `logger`. Uses colourised output in
+development (`NODE_ENV !== 'production'`) and plain timestamped lines in production.
+Log level defaults to `'info'`; override with `LOG_LEVEL` env var. Used throughout
+the codebase for structured runtime logging.
+
+### `src/retry.ts`
+`withRetry(fn, { attempts?, baseDelayMs? })` — wraps any async function with
+exponential-backoff retry logic. Only retries on Anthropic-specific transient
+HTTP status codes: `429` (rate limit), `500`, `502`, `503`, `529` (overloaded).
+Default: 3 attempts, starting at 1 s delay (1 s → 2 s → 4 s). Used by all
+Anthropic API calls in `src/mcp/server.ts`.
+
 ### `src/utils.ts`
 Small shared utilities. Currently exports `errMsg(err)` — safely extracts a string from
 any thrown value (`err.message` for `Error` instances, `String(err)` otherwise).
