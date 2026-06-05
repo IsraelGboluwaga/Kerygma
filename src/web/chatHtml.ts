@@ -278,7 +278,7 @@ export function chatHtml(): string {
   })
 
   sendBtn.addEventListener('click', send)
-  newBtn.addEventListener('click', function () { if (!busy) location.reload() })
+  newBtn.addEventListener('click', function () { if (!busy) window.open(location.href, '_blank') })
 
   // ── Helpers ─────────────────────────────────────────────────────────────
   function scroll() { msgList.scrollTop = msgList.scrollHeight }
