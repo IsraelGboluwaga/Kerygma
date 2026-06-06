@@ -5,10 +5,9 @@ import { readFileSync } from 'fs'
 import { join, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
-import { enqueue, getJob, getRecentJobs, getQueueDepth } from '../queue.js'
-import { ingestSermon, type IngestRequest } from '../ingestion/pipeline.js'
+import { getRecentJobs, getQueueDepth } from '../queue.js'
 import { syncFromApi } from '../scheduler.js'
-import { searchChunks } from '../db/queries.js'
+import { searchChunks, getConfig, countSermons } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
@@ -44,8 +43,6 @@ function checkRateLimit(ip: string): boolean {
   entry.count++
   return true
 }
-
-const MAX_QUEUE_DEPTH = 500
 
 export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
@@ -181,46 +178,20 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.html(adminHtml())
   })
 
-  app.use('/admin/ingest', adminMiddleware)
   app.use('/admin/jobs', adminMiddleware)
-  app.use('/admin/jobs/:id', adminMiddleware)
+  app.use('/admin/status', adminMiddleware)
   app.use('/admin/sync-api', adminMiddleware)
-
-  app.post('/admin/ingest', async (c) => {
-    let req: IngestRequest
-    try {
-      req = await c.req.json<IngestRequest>()
-    } catch {
-      return c.json({ error: 'Invalid JSON body' }, 400)
-    }
-
-    if (!req.downloadUrl || !req.title || !req.speaker || !req.date) {
-      return c.json({ error: 'downloadUrl, title, speaker, and date are required' }, 400)
-    }
-    if (req.series && typeof req.series !== 'string') {
-      return c.json({ error: 'series must be a string' }, 400)
-    }
-
-    if (getQueueDepth() >= MAX_QUEUE_DEPTH) {
-      return c.json({ error: 'Queue is full, try again later' }, 503)
-    }
-
-    const jobId = enqueue(() => ingestSermon(req, anthropic), {
-      title: req.title,
-      downloadUrl: req.downloadUrl,
-      payload: JSON.stringify(req),
-    })
-    return c.json({ jobId }, 202)
-  })
 
   app.get('/admin/jobs', (c) => {
     return c.json(getRecentJobs(50))
   })
 
-  app.get('/admin/jobs/:id', (c) => {
-    const job = getJob(c.req.param('id'))
-    if (!job) return c.json({ error: 'Job not found' }, 404)
-    return c.json(job)
+  app.get('/admin/status', (c) => {
+    return c.json({
+      queueDepth: getQueueDepth(),
+      lastSyncAt: getConfig('last_sync_at'),
+      sermonCount: countSermons(),
+    })
   })
 
   app.post('/admin/sync-api', async (c) => {

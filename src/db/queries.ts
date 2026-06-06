@@ -334,6 +334,13 @@ export function setConfig(key: string, value: string): void {
     .run(key, value)
 }
 
+export function countSermons(): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) as count FROM sermons WHERE ingestion_status = 'done'`)
+    .get() as { count: number }
+  return row.count
+}
+
 export function getSpeakersMatchingFilter(filter: string): string[] {
   const rows = getDb()
     .prepare(
