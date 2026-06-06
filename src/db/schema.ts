@@ -58,6 +58,11 @@ export function initDb(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_transcription_sermon ON transcriptions(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_job_created       ON jobs(created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS config (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
       content,
       summary,
