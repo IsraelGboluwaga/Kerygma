@@ -38,6 +38,7 @@ export async function syncFromApi(anthropic: Anthropic): Promise<void> {
     return
   }
 
+  setConfig('last_sync_at', new Date().toISOString())
   logger.info(`API sync complete: ${enqueued} enqueued, ${skipped} already ingested`)
 }
 
