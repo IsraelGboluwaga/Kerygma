@@ -183,7 +183,7 @@ Fill in the form:
 - **Download URL** — direct link to the audio file (MP3)
 - **Webpage URL** *(optional)* — the sermon page on the church website
 - **Title** — sermon title
-- **Series** *(optional)* — sermon series name; stored as `Series Name-YYYY`
+- **Theme** *(optional)* — sermon theme; normalised into a `themes` table and linked by id
 - **Speaker** — preacher's name (required)
 - **Date** — sermon date
 - **Tags** *(optional)* — comma-separated keywords
@@ -270,7 +270,8 @@ What has Apostle Emmanuel Iren said about healing?
 ## Database Schema
 
 ```sql
-sermons        (id, video_id, title, date, download_url, webpage_url, speaker, series,
+themes         (id, theme_id, name, slug, created_at)
+sermons        (id, video_id, title, date, download_url, webpage_url, speaker, excerpt, theme_id,
                 description, duration, tags, ingestion_status, transcription, created_at)
 transcriptions (id, sermon_id, transcript, segments, created_at)
 chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
@@ -278,7 +279,8 @@ chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 ```
 
 `video_id` comes from the sermon API's `_id` field, or falls back to `SHA256(downloadUrl).slice(0, 16)` for manually-ingested URLs.
-`series` is stored as `Series Name-YYYY` (e.g. `Faith Foundations-2024`).
+`themes` is keyed on the upstream `theme_id` (the API's theme `_id`) so a sermon's theme link survives an upstream name change; `sermons.theme_id` is a foreign key to `themes.id`.
+`excerpt` stores the short summary from the sermon listing API (kept on `sermons` for fast list/card rendering).
 `ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete.
 `transcriptions` stores the full plain-text transcript and JSON segment array separately from `sermons` to keep sermon queries fast.
 

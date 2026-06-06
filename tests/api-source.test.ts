@@ -35,9 +35,10 @@ const baseSermon = {
   preacher: 'Pastor Johnson',
   sermon_date: '2024-03-10T00:00:00.000Z',
   audio_info: { audio_url: '/audio/walking-by-faith.mp3' },
-  theme: { _id: 'theme-1', name: 'Faith Series' },
+  theme: { _id: 'theme-1', name: 'Faith Series', slug: 'faith-series' },
   tags: ['faith', 'grace'],
   description_string: 'A sermon on walking in faith.',
+  excerpt: 'A short take on walking by faith.',
   slug: 'walking-by-faith',
 }
 
@@ -54,7 +55,8 @@ describe('fetchAllSermons', () => {
     expect(req.title).toBe('Walking by Faith')
     expect(req.speaker).toBe('Pastor Johnson')
     expect(req.date).toBe('2024-03-10')
-    expect(req.series).toBe('Faith Series')
+    expect(req.theme).toEqual({ themeId: 'theme-1', name: 'Faith Series', slug: 'faith-series' })
+    expect(req.excerpt).toBe('A short take on walking by faith.')
     expect(req.tags).toEqual(['faith', 'grace'])
     expect(req.description).toBe('A sermon on walking in faith.')
   })
@@ -143,14 +145,24 @@ describe('fetchAllSermons', () => {
     expect((results[0] as Record<string, string[]>).tags).toEqual(['prayer', 'healing'])
   })
 
-  it('omits series when theme is null', async () => {
+  it('omits theme when theme is null', async () => {
     const sermon = { ...baseSermon, theme: null }
     mockFetch.mockResolvedValue(mockOkResponse(makeApiResponse([sermon])))
 
     const results: object[] = []
     for await (const req of fetchAllSermons()) results.push(req)
 
-    expect((results[0] as Record<string, unknown>).series).toBeUndefined()
+    expect((results[0] as Record<string, unknown>).theme).toBeUndefined()
+  })
+
+  it('omits theme when the upstream theme has no _id', async () => {
+    const sermon = { ...baseSermon, theme: { name: 'No Id Theme' } }
+    mockFetch.mockResolvedValue(mockOkResponse(makeApiResponse([sermon])))
+
+    const results: object[] = []
+    for await (const req of fetchAllSermons()) results.push(req)
+
+    expect((results[0] as Record<string, unknown>).theme).toBeUndefined()
   })
 
   it('omits description when description_string is empty', async () => {

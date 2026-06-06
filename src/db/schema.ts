@@ -2,6 +2,14 @@ import type Database from 'better-sqlite3'
 
 export function initDb(db: Database.Database): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS themes (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      theme_id   TEXT UNIQUE NOT NULL,
+      name       TEXT NOT NULL,
+      slug       TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS sermons (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       video_id         TEXT UNIQUE NOT NULL,
@@ -12,7 +20,8 @@ export function initDb(db: Database.Database): void {
       speaker          TEXT,
       duration         INTEGER,
       tags             TEXT,
-      series           TEXT,
+      excerpt          TEXT,
+      theme_id         INTEGER REFERENCES themes(id),
       description      TEXT,
       ingestion_status TEXT NOT NULL DEFAULT 'done',
       transcription    TEXT,
@@ -55,6 +64,7 @@ export function initDb(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_sermon_date         ON sermons(date);
     CREATE INDEX IF NOT EXISTS idx_sermon_video_id     ON sermons(video_id);
+    CREATE INDEX IF NOT EXISTS idx_sermon_theme        ON sermons(theme_id);
     CREATE INDEX IF NOT EXISTS idx_chunk_sermon_id     ON chunks(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_transcription_sermon ON transcriptions(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_job_created       ON jobs(created_at DESC);
@@ -106,8 +116,13 @@ export function initDb(db: Database.Database): void {
   if (sermonColNames.has('url') && !sermonColNames.has('download_url')) {
     db.exec(`ALTER TABLE sermons RENAME COLUMN url TO download_url`)
   }
-  if (!sermonColNames.has('series')) {
-    db.exec(`ALTER TABLE sermons ADD COLUMN series TEXT`)
+  if (!sermonColNames.has('excerpt')) {
+    db.exec(`ALTER TABLE sermons ADD COLUMN excerpt TEXT`)
+  }
+  if (!sermonColNames.has('theme_id')) {
+    // Nullable FK with no default — safe to add via ALTER TABLE in SQLite.
+    // The legacy `series` TEXT column (if present) is left in place but unused.
+    db.exec(`ALTER TABLE sermons ADD COLUMN theme_id INTEGER REFERENCES themes(id)`)
   }
   if (!sermonColNames.has('ingestion_status')) {
     // Existing rows are fully ingested, so default them to 'done'
