@@ -247,6 +247,7 @@ export function createRouter(anthropic: Anthropic): Hono {
 
     app.get('/assets/:file+', (c) => {
       const file = c.req.param('file')
+      if (!file) return c.notFound()
       try {
         const data = readFileSync(join(CLIENT_DIST, 'assets', file))
         const mime = MIME[extname(file)] ?? 'application/octet-stream'
