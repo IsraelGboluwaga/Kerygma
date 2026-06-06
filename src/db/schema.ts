@@ -13,9 +13,18 @@ export function initDb(db: Database.Database): void {
       duration         INTEGER,
       tags             TEXT,
       series           TEXT,
+      description      TEXT,
       ingestion_status TEXT NOT NULL DEFAULT 'done',
       transcription    TEXT,
       created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS transcriptions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      sermon_id  INTEGER UNIQUE NOT NULL REFERENCES sermons(id),
+      transcript TEXT NOT NULL,
+      segments   TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS chunks (
@@ -44,10 +53,16 @@ export function initDb(db: Database.Database): void {
       completed_at TEXT
     );
 
-    CREATE INDEX IF NOT EXISTS idx_sermon_date       ON sermons(date);
-    CREATE INDEX IF NOT EXISTS idx_sermon_video_id   ON sermons(video_id);
-    CREATE INDEX IF NOT EXISTS idx_chunk_sermon_id   ON chunks(sermon_id);
+    CREATE INDEX IF NOT EXISTS idx_sermon_date         ON sermons(date);
+    CREATE INDEX IF NOT EXISTS idx_sermon_video_id     ON sermons(video_id);
+    CREATE INDEX IF NOT EXISTS idx_chunk_sermon_id     ON chunks(sermon_id);
+    CREATE INDEX IF NOT EXISTS idx_transcription_sermon ON transcriptions(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_job_created       ON jobs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS config (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
       content,
@@ -100,6 +115,9 @@ export function initDb(db: Database.Database): void {
   }
   if (!sermonColNames.has('transcription')) {
     db.exec(`ALTER TABLE sermons ADD COLUMN transcription TEXT`)
+  }
+  if (!sermonColNames.has('description')) {
+    db.exec(`ALTER TABLE sermons ADD COLUMN description TEXT`)
   }
 
   const existingChunkCols = db

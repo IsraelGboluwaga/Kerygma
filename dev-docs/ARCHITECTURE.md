@@ -27,10 +27,10 @@ Hono HTTP Server (:3000)
          │
     Ingestion Pipeline
          ├── 1. Download MP3 → temp file
-         ├── 2. nodejs-whisper → TranscriptSegment[]
+         ├── 2. OpenAI Whisper API → TranscriptSegment[] + plain-text transcript
          ├── 3. Claude → semantic chunks (section_name, timestamps, topics, summary)
          ├── 4. @xenova/transformers → 384-dim embedding per chunk
-         └── 5. better-sqlite3 → write sermons + chunks to SQLite
+         └── 5. better-sqlite3 → write sermons + transcriptions + chunks to SQLite
 
 Raw Node HTTP server (main.ts)
     ├── /mcp  → StreamableHTTPServerTransport → McpServer (4 read-only tools)
@@ -51,7 +51,7 @@ McpServer (4 read-only tools)
 Validates `process.env` with Zod on startup. If a required variable is missing, the
 process crashes with a clear error before doing anything else. Exports a frozen singleton.
 
-Key variables: `ANTHROPIC_API_KEY`, `ADMIN_SECRET`, `MINISTRY_NAME` (used in UI titles and AI system prompts), `WHISPER_MODEL` (must match the model baked into the Docker image).
+Key required variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ADMIN_SECRET`, `SERMON_BASE_URL`. Optional: `MINISTRY_NAME`, `CHUNKING_MODEL`, `CLAUDE_MODEL`, `MAX_AUDIO_DURATION_SECONDS`, `DB_PATH`, `PORT`.
 
 ### `src/logger.ts`
 Winston-based logger exported as a singleton `logger`. Uses colourised output in
@@ -87,8 +87,10 @@ All other modules import this singleton — no connection pooling needed for SQL
 Typed functions for every DB operation:
 - `saveSermon(data)` → `number` (sermon id)
 - `saveChunks(sermonId, chunks[])` — uses `db.transaction()` for atomicity
-- `insertPartialSermon(data)` → `number` — saves a partially-ingested sermon with `ingestion_status='transcribed'` and raw transcription JSON
-- `completeSermon(id)` — sets `ingestion_status='done'`, clears `transcription`
+- `insertPartialSermon(data)` → `number` — saves a partially-ingested sermon with `ingestion_status='transcribed'`
+- `insertTranscription(sermonId, transcript, segments)` — stores plain-text + JSON segments in the `transcriptions` table
+- `getTranscriptionBySermonId(id)` → `TranscriptionRow | null`
+- `completeSermon(id)` — sets `ingestion_status='done'`
 - `getSermonByVideoId(id)` → `SermonRow | null`
 - `getSermonsByDate(date)` → `SermonRow[]`
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
@@ -104,12 +106,16 @@ Returns `{ filePath, cleanup }` — caller always calls `cleanup()` in a `finall
 Uses `AbortSignal.timeout(5 * 60 * 1000)` to cap download time.
 
 ### `src/ingestion/transcriber.ts`
-Calls `nodejs-whisper` (Node bindings for whisper.cpp) on the temp file.
-nodejs-whisper converts the MP3 to WAV first, then runs `whisper-cli` on the WAV.
-whisper-cli writes the sidecar as `<file>.wav.json` (not `<file>.json`).
-The transcriber reads that path, maps timestamps from ms → seconds, then deletes all
-sidecars (`.wav`, `.wav.json`, `.wav.txt`) in a `finally` block.
-Returns `{ segments: TranscriptSegment[], duration: number }`.
+Calls the OpenAI Whisper API (`whisper-1` model, `response_format: 'verbose_json'`).
+The `verbose_json` format returns both the full plain-text transcript and per-segment timestamps.
+Lazy-initialises a singleton `OpenAI` client (one per process).
+Returns `{ segments: TranscriptSegment[], duration: number, transcript: string }`.
+
+### `src/ingestion/api-source.ts`
+Paginates through the sermon REST API at `${SERMON_BASE_URL}/sermons` (50 per page).
+Maps each API sermon `{ _id, title, preacher, sermon_date, audio_info, theme, tags, description_string }`
+to an `IngestRequest`. Audio URLs that are relative paths are prefixed with `SERMON_BASE_URL`.
+Exported as an async generator: `fetchAllSermons(): AsyncGenerator<IngestRequest>`.
 
 ### `src/ingestion/chunker.ts`
 - Formats transcript as `[MM:SS] text` lines
@@ -128,11 +134,12 @@ Stored in `chunks.embedding BLOB` for future vector search — not queried yet.
 ### `src/ingestion/pipeline.ts`
 Orchestrates the full ingestion flow for one sermon:
 ```
-hash URL → check existing record
-  → if ingestion_status='transcribed': resume from stored transcription (skip download)
+videoId = req.videoId ?? SHA256(downloadUrl)[:16]
+check existing record
+  → if ingestion_status='transcribed': resume from transcriptions table (skip download)
   → if ingestion_status='done': return duplicate
-  → else: download → transcribe → insertPartialSermon (saves transcription to DB)
-            → chunk → embed each chunk → completeSermon (sets status='done', clears transcription)
+  → else: download → transcribe → insertPartialSermon → insertTranscription
+            → chunk → embed each chunk → completeSermon (sets status='done')
             → cleanup temp file
 ```
 `try/finally` guarantees the temp file is always deleted.
@@ -141,9 +148,17 @@ Returns `{ status: 'ok' | 'duplicate' | 'too_long' | 'error', message, sermonId?
 
 Input:
 ```ts
-{ downloadUrl, webpageUrl?, title, speaker, date, series?, tags? }
+{ videoId?, downloadUrl, webpageUrl?, title, speaker, date, series?, tags?, description? }
 ```
 `series` is stored as `${series}-${year}` (e.g. `Faith Foundations-2024`). Speaker is required.
+
+### `src/scheduler.ts`
+Registers a `node-cron` job that runs every 10 hours for the first 4 days after startup, then
+switches to Tue + Fri at 06:00 (`'0 6 * * 2,5'`) for ongoing syncs. The switch is handled via
+a `setTimeout` that stops the frequent task and starts the weekly one after 4 days.
+Calls `fetchAllSermons()` and enqueues any sermon whose `videoId` doesn't exist in the DB yet.
+Stops enqueueing if `getQueueDepth() >= 500` to avoid runaway growth.
+Also exports `syncFromApi(anthropic)` for use by the manual `POST /admin/sync-api` endpoint.
 
 ### `src/queue.ts`
 In-process FIFO queue. Jobs are held in a `Map<string, Job>` (in-memory) and persisted to
@@ -199,9 +214,9 @@ Hono app wiring all routes:
 
 **Admin (`/admin/*`)** — write/data routes protected by `X-Admin-Secret` middleware; the two HTML pages (`/admin`, `/admin/status`) are public and prompt for the secret client-side
 - `GET /admin` — serves the admin UI
-- `GET /admin/status` — serves the live status dashboard
-- `POST /admin/ingest` — validates JSON body, enqueues pipeline job (with a `setPhase` reporter), returns `{ jobId }` (202)
-- `GET /admin/jobs` — returns recent job list
+- `GET /admin/live` — serves the live phase/queue status dashboard (HTML)
+- `POST /admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202)
+- `GET /admin/jobs` — returns recent job list (up to 50)
 - `GET /admin/jobs/:id` — returns single job status
 - `GET /admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position`
 
@@ -211,7 +226,8 @@ Sequential startup:
 2. `loadEmbedder()` — warm up the embedding model
 3. Raw `http.createServer()` — `/mcp` dispatches to a fresh `McpServer` per request;
    everything else passes through `getRequestListener(app.fetch)` (Hono)
-4. `SIGTERM` / `SIGINT` handlers — wait for the active job to finish before exiting
+4. `startScheduler(anthropic)` — registers cron job (every 10 h for 4 days, then Tue + Fri 06:00)
+5. `SIGTERM` / `SIGINT` handlers — wait for the active job to finish before exiting
 
 ---
 
@@ -235,25 +251,27 @@ Member types question → POST / { messages: [...] }
 ## Data Flow: Ingestion
 
 ```
-Admin submits form
+Admin submits form (or scheduler triggers sync, or POST /admin/sync-api called)
     → POST /admin/ingest  (JSON body)
     → queue.enqueue(job)        returns jobId immediately (202)
     → browser polls /admin/jobs/:jobId
 
 Meanwhile, in background:
     pipeline.ingestSermon(req)
-        → hash downloadUrl → check for existing record
+        → videoId = req.videoId ?? SHA256(downloadUrl)[:16]
+        → check for existing record
         → if ingestion_status='transcribed':
-              parse stored transcription → skip to chunking
+              read transcriptions table (or legacy sermons.transcription) → skip to chunking
           else:
-              downloader.download(downloadUrl)  temp file
-              transcriber.transcribe(file)      segments + duration
+              downloader.download(downloadUrl)   temp file
+              transcriber.transcribeAudio(file)  OpenAI Whisper API → segments + transcript + duration
               duration > MAX → return { status: 'too_long' }
-              queries.insertPartialSermon()     saves transcription to DB
-        → chunker.chunkSermon(data)            Claude API call
-        → embedder.embed(chunk.content)        for each chunk
-        → queries.saveChunks + completeSermon  write chunks, clear transcription
-        → cleanup()                            delete temp file
+              queries.insertPartialSermon()      saves partial sermon record
+              queries.insertTranscription()      saves transcript + segments to transcriptions table
+        → chunker.chunkSermon(segments)         Claude API call
+        → embedder.embed(chunk.content)         for each chunk
+        → queries.saveChunks + completeSermon   write chunks, set status='done'
+        → cleanup()                             delete temp file
     → job.status = 'done' | 'failed'
 ```
 
@@ -284,18 +302,28 @@ e.g. ask_church("What was taught about faith?")
 -- One row per MP3
 CREATE TABLE sermons (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    video_id         TEXT UNIQUE NOT NULL,  -- SHA256(downloadUrl)[:16]
+    video_id         TEXT UNIQUE NOT NULL,  -- API _id, or SHA256(downloadUrl)[:16]
     title            TEXT NOT NULL,
     date             TEXT NOT NULL,         -- YYYY-MM-DD
     download_url     TEXT NOT NULL,         -- original MP3 URL
     webpage_url      TEXT,                  -- optional source page
     speaker          TEXT NOT NULL,         -- required
     series           TEXT,                  -- e.g. "Faith Foundations-2024"
+    description      TEXT,                  -- from API description_string
     duration         INTEGER,               -- seconds
     tags             TEXT,                  -- JSON array
     ingestion_status TEXT NOT NULL DEFAULT 'done',  -- 'transcribed' | 'done'
-    transcription    TEXT,                  -- raw JSON, cleared after chunking
+    transcription    TEXT,                  -- legacy field, kept for compat; new rows use transcriptions table
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Plain-text transcript + JSON segments stored separately to avoid bloating sermon queries
+CREATE TABLE transcriptions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    sermon_id  INTEGER UNIQUE NOT NULL REFERENCES sermons(id),
+    transcript TEXT NOT NULL,   -- full plain-text from Whisper API
+    segments   TEXT NOT NULL,   -- JSON-encoded TranscriptSegment[]
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Many rows per sermon
@@ -343,16 +371,14 @@ The image uses a two-stage build to keep the runtime image small:
 
 ```
 Stage 1 — builder (node:20, Debian Bookworm)
-    apt-get install cmake build-essential python3 wget
-    yarn install --frozen-lockfile          ← compiles better-sqlite3
-    cmake -DGGML_NATIVE=OFF ...             ← compiles whisper-cli (native CPU
-                                               detection disabled for Docker compat)
-    wget ggml-medium.en.bin                  ← bakes Whisper model into image layer
-    NODE_OPTIONS=--max-old-space-size=4096  ← tsc needs >2GB heap
-    yarn build                              ← tsc → dist/
+    apt-get install build-essential python3  ← compile better-sqlite3 native addon
+    yarn install --frozen-lockfile
+    yarn build                               ← esbuild → dist/ (transpile only, no type check)
 
 Stage 2 — runtime (node:20-slim, same Debian Bookworm)
-    apt-get install ffmpeg           ← needed at runtime for MP3→WAV conversion
+    apt-get install ffmpeg           ← re-encodes audio > 25 MB before Whisper API upload
+                    libstdc++6       ← C++ runtime stripped from node:20-slim, needed by
+                    libgomp1            better-sqlite3
     COPY dist/ node_modules/ package.json from builder
 ```
 
@@ -360,7 +386,49 @@ Both stages use the same Debian Bookworm base so compiled `.node` binaries are p
 
 **Layer caching:** `apt-get` and `yarn install` layers are cached until `yarn.lock` changes. Code changes only invalidate the final `COPY . .` + `yarn build` layers, making rebuilds fast.
 
-To use a different Whisper model at build time:
-```bash
-docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
+---
+
+## Database Backup (Litestream + R2)
+
+When the four R2 environment variables are set (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`), the container starts under Litestream instead of running Node directly.
+
+### How it works
+
 ```
+Container start (with R2 vars set)
+    │
+    docker-entrypoint.sh
+    │
+    litestream replicate -config litestream.yml -exec "node dist/main.js"
+    │
+    ├── 1. Restore — downloads the latest snapshot + WAL frames from R2 to $DB_PATH
+    │             (no-op on first boot if the bucket is empty)
+    │
+    ├── 2. Node starts — app opens the restored SQLite file normally
+    │
+    └── 3. Continuous replication — Litestream monitors the WAL and streams changes
+              to R2 in near-real-time while Node is running
+              (target checkpoint interval: 1 s)
+
+Container stop / crash
+    └── Litestream flushes remaining WAL frames before exiting;
+        next cold start restores from where replication left off
+```
+
+### Graceful degradation
+
+`docker-entrypoint.sh` checks all four R2 vars at runtime. If any is absent, it falls back to `node dist/main.js` directly — Litestream is never invoked and the app starts normally. This means local development and staging environments without R2 credentials work identically to before.
+
+### Config file
+
+`litestream.yml` at the repo root uses env-var substitution (`${VAR}`) so no credentials are baked into the image. The replica path inside the bucket is `sermons/`.
+
+### Recovery procedure
+
+To restore a database manually (e.g. migrating to a new Railway project):
+
+```bash
+litestream restore -config litestream.yml $DB_PATH
+```
+
+Litestream downloads the latest snapshot and applies all subsequent WAL frames, producing a consistent SQLite file.

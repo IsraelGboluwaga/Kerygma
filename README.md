@@ -138,13 +138,9 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    Edit `.env`:
    ```env
    ANTHROPIC_API_KEY=sk-ant-...
+   OPENAI_API_KEY=sk-...
    ADMIN_SECRET=your-secret-password
-
-   # Optional
-   DB_PATH=/data/sermons.db
-   PORT=3000
-   MAX_AUDIO_DURATION_SECONDS=7200
-   WHISPER_MODEL=medium.en
+   SERMON_BASE_URL=https://sermons-api.example.com
    ```
 
 3. **Build the image**
@@ -152,7 +148,7 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    docker build -t kerygma .
    ```
 
-   This compiles whisper.cpp and downloads the Whisper model into the image. Takes a few minutes on first build; subsequent code-only rebuilds are fast due to layer caching.
+   Builds the TypeScript source and compiles native addons. No large model downloads — transcription is handled by the OpenAI Whisper API at runtime.
 
 4. **Run**
    ```bash
@@ -161,21 +157,15 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
 
    The `-v kerygma-data:/data` flag creates a named volume so the SQLite database persists across container restarts. The server starts at `http://localhost:3000`.
 
-To use a larger Whisper model (e.g. `medium.en`):
-```bash
-docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
-```
-
 ---
 
 ### Local Development (without Docker)
 
-Requires: Node 20+, Yarn, cmake, ffmpeg (`brew install cmake ffmpeg` on macOS).
+Requires: Node 20+, Yarn, ffmpeg (`brew install ffmpeg` on macOS; `apt-get install ffmpeg` on Linux).
 
 ```bash
 yarn install
-npx nodejs-whisper download   # compiles whisper.cpp + downloads model (~142MB)
-cp .env.example .env          # fill in ANTHROPIC_API_KEY + ADMIN_SECRET
+cp .env.example .env          # fill in all required variables
 yarn dev
 ```
 
@@ -260,28 +250,36 @@ What has Apostle Emmanuel Iren said about healing?
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
+| `OPENAI_API_KEY` | Yes | — | OpenAI API key (used for Whisper transcription) |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
-| `MINISTRY_NAME` | Yes | `the church` | Ministry name shown in the UI and AI prompts |
+| `SERMON_BASE_URL` | Yes | — | Base URL for the sermon REST API and audio files |
+| `MINISTRY_NAME` | No | `the church` | Ministry name shown in the UI and AI prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
-| `WHISPER_MODEL` | No | `medium.en` | Whisper model name |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chat synthesis |
+| `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
+| `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream R2 replication |
+| `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication |
+| `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key for Litestream replication |
+| `R2_BUCKET` | No | — | R2 bucket name; replication is skipped if any R2 var is unset |
 
 ---
 
 ## Database Schema
 
 ```sql
-sermons (id, video_id, title, date, download_url, webpage_url, speaker, series,
-         duration, tags, ingestion_status, transcription, created_at)
-chunks  (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
-chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
+sermons        (id, video_id, title, date, download_url, webpage_url, speaker, series,
+                description, duration, tags, ingestion_status, transcription, created_at)
+transcriptions (id, sermon_id, transcript, segments, created_at)
+chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
+chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 ```
 
-`video_id` is `SHA256(downloadUrl).slice(0, 16)` — duplicate detection is URL-based.
-`series` is stored as `Series Name-YYYY` (e.g. `Faith Foundations-2024`), derived from the series input and the sermon date.
-`ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete. Partial records enable retry resume without re-downloading.
+`video_id` comes from the sermon API's `_id` field, or falls back to `SHA256(downloadUrl).slice(0, 16)` for manually-ingested URLs.
+`series` is stored as `Series Name-YYYY` (e.g. `Faith Foundations-2024`).
+`ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete.
+`transcriptions` stores the full plain-text transcript and JSON segment array separately from `sermons` to keep sermon queries fast.
 
 ---
 
@@ -289,12 +287,12 @@ chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
 
 ```bash
 yarn dev            # run with tsx watch (needs cmake + ffmpeg + whisper model on host)
-yarn build          # tsc → dist/
+yarn build          # esbuild → dist/ (fast transpile, no type check)
+yarn typecheck      # tsc --noEmit (full type check)
 yarn start          # node dist/main.js
 yarn test           # vitest run — 60 tests
 yarn test:watch     # vitest in watch mode
 yarn test:coverage  # vitest with v8 coverage report
-yarn typecheck      # tsc --noEmit
 ```
 
 For iterating on code without rebuilding the full Docker image, `yarn dev` is faster — but you need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`).
@@ -317,12 +315,11 @@ The Whisper model is downloaded during the Docker build step and baked into the 
 Docker layer order is optimised so code-only changes are fast:
 
 ```
-apt-get install cmake...    ← cached forever
-COPY package.json yarn.lock ← cached until deps change
-RUN yarn install            ← cached until yarn.lock changes (compiles whisper.cpp + sqlite)
-RUN wget whisper model      ← cached until yarn.lock changes
-COPY . .                    ← invalidated on every code change
-RUN yarn build              ← only this re-runs for code changes (~seconds)
+apt-get install build-essential...  ← cached forever
+COPY package.json yarn.lock         ← cached until deps change
+RUN yarn install                    ← cached until yarn.lock changes (compiles better-sqlite3)
+COPY . .                            ← invalidated on every code change
+RUN yarn build                      ← only this re-runs for code changes (~seconds)
 ```
 
 ---

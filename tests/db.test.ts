@@ -3,6 +3,8 @@ import { initDatabase } from '../src/db/connection.js'
 import {
   saveSermon,
   insertPartialSermon,
+  insertTranscription,
+  getTranscriptionBySermonId,
   completeSermon,
   saveChunks,
   getSermonByVideoId,
@@ -200,22 +202,14 @@ describe('getSpeakersMatchingFilter', () => {
   })
 })
 
-describe('insertPartialSermon / completeSermon', () => {
+describe('insertPartialSermon / completeSermon / insertTranscription', () => {
   it('partial sermon is not returned by listSermons until completed', () => {
-    insertPartialSermon({
-      ...sampleSermon(),
-      duration: 3600,
-      transcription: '[]',
-    })
+    insertPartialSermon({ ...sampleSermon(), duration: 3600 })
     expect(listSermons(10)).toHaveLength(0)
   })
 
-  it('completeSermon makes it visible and clears transcription', () => {
-    const id = insertPartialSermon({
-      ...sampleSermon(),
-      duration: 3600,
-      transcription: '[{"text":"test","start":0,"duration":1}]',
-    })
+  it('completeSermon makes it visible and sets status to done', () => {
+    const id = insertPartialSermon({ ...sampleSermon(), duration: 3600 })
     completeSermon(id)
     const rows = listSermons(10)
     expect(rows).toHaveLength(1)
@@ -224,15 +218,23 @@ describe('insertPartialSermon / completeSermon', () => {
   })
 
   it('partial record is retrievable by video_id for retry', () => {
-    insertPartialSermon({
-      ...sampleSermon(),
-      duration: 3600,
-      transcription: '[{"text":"test","start":0,"duration":1}]',
-    })
+    const id = insertPartialSermon({ ...sampleSermon(), duration: 3600 })
     const row = getSermonByVideoId('abc123def456abcd')
     expect(row).not.toBeNull()
     expect(row!.ingestion_status).toBe('transcribed')
-    expect(row!.transcription).not.toBeNull()
+
+    // Transcription is stored in the transcriptions table, not on the sermon row
+    insertTranscription(id, 'Hello church.', '[{"text":"Hello church.","start":0,"duration":2}]')
+    const t = getTranscriptionBySermonId(id)
+    expect(t).not.toBeNull()
+    expect(t!.transcript).toBe('Hello church.')
+    expect(JSON.parse(t!.segments)).toHaveLength(1)
+  })
+
+  it('description is stored and retrievable', () => {
+    const id = saveSermon({ ...sampleSermon(), description: 'A sermon about faith.' })
+    const row = getSermonByVideoId('abc123def456abcd')
+    expect(row!.description).toBe('A sermon about faith.')
   })
 })
 

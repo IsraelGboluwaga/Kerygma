@@ -35,8 +35,17 @@ export interface SermonRow {
   duration: number | null
   tags: string | null
   series: string | null
+  description: string | null
   ingestion_status: string
   transcription: string | null
+  created_at: string
+}
+
+export interface TranscriptionRow {
+  id: number
+  sermon_id: number
+  transcript: string
+  segments: string  // JSON-encoded TranscriptSegment[]
   created_at: string
 }
 
@@ -71,11 +80,11 @@ export interface SaveSermonInput {
   duration?: number
   tags?: string[]
   series?: string
+  description?: string
 }
 
 export interface InsertPartialSermonInput extends SaveSermonInput {
-  duration: number          // required — known after transcription
-  transcription: string     // JSON-encoded TranscriptSegment[]
+  duration: number  // required — known after transcription
 }
 
 export interface SaveChunkInput {
@@ -91,8 +100,8 @@ export interface SaveChunkInput {
 export function saveSermon(data: SaveSermonInput): number {
   const result = getDb()
     .prepare(
-      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, ingestion_status)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, 'done')`
+      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, description, ingestion_status)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, @description, 'done')`
     )
     .run({
       video_id: data.video_id,
@@ -104,6 +113,7 @@ export function saveSermon(data: SaveSermonInput): number {
       duration: data.duration ?? null,
       tags: data.tags ? JSON.stringify(data.tags) : null,
       series: data.series ?? null,
+      description: data.description ?? null,
     })
   return result.lastInsertRowid as number
 }
@@ -111,8 +121,8 @@ export function saveSermon(data: SaveSermonInput): number {
 export function insertPartialSermon(data: InsertPartialSermonInput): number {
   const result = getDb()
     .prepare(
-      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, ingestion_status, transcription)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, 'transcribed', @transcription)`
+      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, description, ingestion_status)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, @description, 'transcribed')`
     )
     .run({
       video_id: data.video_id,
@@ -124,17 +134,36 @@ export function insertPartialSermon(data: InsertPartialSermonInput): number {
       duration: data.duration,
       tags: data.tags ? JSON.stringify(data.tags) : null,
       series: data.series ?? null,
-      transcription: data.transcription,
+      description: data.description ?? null,
     })
   return result.lastInsertRowid as number
 }
 
 export function completeSermon(id: number): void {
   getDb()
-    .prepare(
-      `UPDATE sermons SET ingestion_status = 'done', transcription = NULL WHERE id = ?`
-    )
+    .prepare(`UPDATE sermons SET ingestion_status = 'done' WHERE id = ?`)
     .run(id)
+}
+
+export function insertTranscription(
+  sermonId: number,
+  transcript: string,
+  segments: string
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO transcriptions (sermon_id, transcript, segments)
+       VALUES (?, ?, ?)`
+    )
+    .run(sermonId, transcript, segments)
+}
+
+export function getTranscriptionBySermonId(sermonId: number): TranscriptionRow | null {
+  return (
+    (getDb()
+      .prepare(`SELECT * FROM transcriptions WHERE sermon_id = ?`)
+      .get(sermonId) as TranscriptionRow | undefined) ?? null
+  )
 }
 
 export function saveChunks(sermonId: number, chunks: SaveChunkInput[]): void {
@@ -292,6 +321,28 @@ export function failStaleJobs(): void {
        WHERE status IN ('queued', 'running')`
     )
     .run()
+}
+
+// ── Config key-value store ───────────────────────────────────────────────────
+
+export function getConfig(key: string): string | null {
+  const row = getDb()
+    .prepare(`SELECT value FROM config WHERE key = ?`)
+    .get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setConfig(key: string, value: string): void {
+  getDb()
+    .prepare(`INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+    .run(key, value)
+}
+
+export function countSermons(): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) as count FROM sermons WHERE ingestion_status = 'done'`)
+    .get() as { count: number }
+  return row.count
 }
 
 export function getSpeakersMatchingFilter(filter: string): string[] {

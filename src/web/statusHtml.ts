@@ -1,7 +1,7 @@
 import { config } from '../config.js'
 
 /**
- * Live, read-only status dashboard served at GET /admin/status.
+ * Live, read-only status dashboard served at GET /admin/live.
  * Polls GET /admin/status/data every 2s and renders the active job's phase
  * stepper plus the current queue — transparency without touching the logs.
  */

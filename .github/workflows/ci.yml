@@ -8,7 +8,7 @@ on:
 
 jobs:
   ci:
-    name: Type check / Lint / Test / Build
+    name: App Checks
     runs-on: ubuntu-latest
 
     steps:
@@ -24,8 +24,6 @@ jobs:
 
       - name: Type check
         run: yarn typecheck
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Lint
         run: yarn lint

@@ -7,10 +7,11 @@ import { logger } from '../logger.js'
 import { errMsg } from '../utils.js'
 import {
   getSermonByVideoId,
-
   insertPartialSermon,
   completeSermon,
   saveChunks,
+  insertTranscription,
+  getTranscriptionBySermonId,
 } from '../db/queries.js'
 import type { TranscriptSegment } from './transcriber.js'
 import { downloadMp3 } from './downloader.js'
@@ -23,13 +24,15 @@ import type { JobPhase } from '../queue.js'
 export type PhaseReporter = (phase: JobPhase) => void
 
 export interface IngestRequest {
+  videoId?: string         // API-provided stable ID; falls back to SHA256(downloadUrl)
   downloadUrl: string
   webpageUrl?: string
   title: string
   speaker: string
-  date: string          // YYYY-MM-DD
+  date: string             // YYYY-MM-DD
   series?: string
   tags?: string[]
+  description?: string
 }
 
 export type IngestStatus = 'ok' | 'duplicate' | 'too_long' | 'error'
@@ -108,16 +111,21 @@ export async function ingestSermon(
   anthropic: Anthropic,
   onPhase?: PhaseReporter
 ): Promise<IngestResult> {
-  const videoId = makeVideoId(req.downloadUrl)
+  const videoId = req.videoId ?? makeVideoId(req.downloadUrl)
   const title = req.title || defaultTitle(req.downloadUrl)
 
   const existing = getSermonByVideoId(videoId)
 
-  // Resume from chunking if transcription was already saved
-  if (existing && existing.ingestion_status === 'transcribed' && existing.transcription) {
+  // Resume from chunking — check new transcriptions table first, then legacy column
+  if (existing && existing.ingestion_status === 'transcribed') {
     logger.info(`Resuming "${title}" — transcription already saved, skipping download`)
     try {
-      const segments = JSON.parse(existing.transcription) as TranscriptSegment[]
+      const transcriptionRow = getTranscriptionBySermonId(existing.id)
+      const segmentsJson = transcriptionRow?.segments ?? existing.transcription
+      if (!segmentsJson) {
+        throw new Error('Partial record found but no transcription data available')
+      }
+      const segments = JSON.parse(segmentsJson) as TranscriptSegment[]
       const chunkCount = await chunkEmbedSave(existing.id, title, segments, anthropic, onPhase)
       return {
         status: 'ok',
@@ -148,7 +156,7 @@ export async function ingestSermon(
 
     onPhase?.('transcribing')
     logger.info(`Transcribing "${title}"...`)
-    const { segments, duration } = await transcribeAudio(download.filePath)
+    const { segments, duration, transcript } = await transcribeAudio(download.filePath)
 
     // Duration check before touching the DB
     const maxDuration = config.MAX_AUDIO_DURATION_SECONDS
@@ -171,8 +179,10 @@ export async function ingestSermon(
       duration: Math.round(duration),
       tags: req.tags,
       series: formatSeries(req.series, req.date),
-      transcription: JSON.stringify(segments),
+      description: req.description,
     })
+
+    insertTranscription(sermonId, transcript, JSON.stringify(segments))
 
     const chunkCount = await chunkEmbedSave(sermonId, title, segments, anthropic, onPhase)
 

@@ -5,15 +5,17 @@ import { readFileSync } from 'fs'
 import { join, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
-import { enqueue, getJob, getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
-import { ingestSermon, type IngestRequest } from '../ingestion/pipeline.js'
-import { searchChunks } from '../db/queries.js'
+import { getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
+import { syncFromApi } from '../scheduler.js'
+import { searchChunks, getConfig, countSermons } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
 import { adminHtml } from './adminHtml.js'
 import { statusHtml } from './statusHtml.js'
+import { dbHtml } from './dbHtml.js'
 import { chatHtml } from './chatHtml.js'
+import { getDb } from '../db/connection.js'
 
 const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
 
@@ -43,12 +45,13 @@ function checkRateLimit(ip: string): boolean {
   return true
 }
 
-const MAX_QUEUE_DEPTH = 50
-
 export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
 
   // ── Static assets ──────────────────────────────────────────────────────
+  app.get('/favicon.ico', (c) => c.redirect('/assets/favicon.png', 301))
+
+
   app.get('/assets/:file', (c) => {
     const file = c.req.param('file')
     try {
@@ -177,52 +180,64 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.html(adminHtml())
   })
 
-  // Live status dashboard — page is public HTML (prompts for secret client-side),
-  // the data endpoint behind it is protected.
-  app.get('/admin/status', (c) => {
-    return c.html(statusHtml())
-  })
+  // Live phase/queue dashboard — public HTML, data endpoint is protected
+  app.get('/admin/live', (c) => c.html(statusHtml()))
 
-  app.use('/admin/ingest', adminMiddleware)
   app.use('/admin/jobs', adminMiddleware)
-  app.use('/admin/jobs/:id', adminMiddleware)
+  app.use('/admin/status', adminMiddleware)
   app.use('/admin/status/data', adminMiddleware)
-
-  app.post('/admin/ingest', async (c) => {
-    let req: IngestRequest
-    try {
-      req = await c.req.json<IngestRequest>()
-    } catch {
-      return c.json({ error: 'Invalid JSON body' }, 400)
-    }
-
-    if (!req.downloadUrl || !req.title || !req.speaker || !req.date) {
-      return c.json({ error: 'downloadUrl, title, speaker, and date are required' }, 400)
-    }
-    if (req.series && typeof req.series !== 'string') {
-      return c.json({ error: 'series must be a string' }, 400)
-    }
-
-    if (getQueueDepth() >= MAX_QUEUE_DEPTH) {
-      return c.json({ error: 'Queue is full, try again later' }, 503)
-    }
-
-    const jobId = enqueue((ctx) => ingestSermon(req, anthropic, ctx.setPhase), {
-      title: req.title,
-      downloadUrl: req.downloadUrl,
-      payload: JSON.stringify(req),
-    })
-    return c.json({ jobId }, 202)
-  })
+  app.use('/admin/sync-api', adminMiddleware)
 
   app.get('/admin/jobs', (c) => {
     return c.json(getRecentJobs(50))
   })
 
-  app.get('/admin/jobs/:id', (c) => {
-    const job = getJob(c.req.param('id'))
-    if (!job) return c.json({ error: 'Job not found' }, 404)
-    return c.json(job)
+  app.get('/admin/status', (c) => {
+    return c.json({
+      queueDepth: getQueueDepth(),
+      lastSyncAt: getConfig('last_sync_at'),
+      sermonCount: countSermons(),
+    })
+  })
+
+  app.post('/admin/sync-api', async (c) => {
+    void syncFromApi(anthropic)
+    return c.json({ ok: true, message: 'API sync started in background' }, 202)
+  })
+
+  // ── DB Browser UI + data API ───────────────────────────────────────────
+  const DB_TABLES = new Set(['sermons', 'chunks', 'jobs'])
+
+  app.get('/lyrical-theology', (c) => c.html(dbHtml()))
+
+  app.use('/lyrical-theology/:table', adminMiddleware)
+
+  app.get('/lyrical-theology/:table', (c) => {
+    const table = c.req.param('table')
+    if (!DB_TABLES.has(table)) {
+      return c.json({ error: 'Unknown table' }, 400)
+    }
+
+    const limit = Math.min(Math.max(1, parseInt(c.req.query('limit') ?? '50', 10)), 200)
+    const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10))
+
+    const db = getDb()
+    const pragma = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    const columns = pragma.map((r) => r.name)
+    const { count } = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number }
+    const rawRows = db
+      .prepare(`SELECT * FROM ${table} ORDER BY rowid DESC LIMIT ? OFFSET ?`)
+      .all(limit, offset) as Record<string, unknown>[]
+
+    const rows = rawRows.map((row) => {
+      const out: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(row)) {
+        out[k] = Buffer.isBuffer(v) ? `[blob: ${v.length}B]` : v
+      }
+      return out
+    })
+
+    return c.json({ columns, rows, total: count, limit, offset })
   })
 
   // Snapshot for the live status dashboard: recent jobs (queued ones carry

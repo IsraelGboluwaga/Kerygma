@@ -50,23 +50,29 @@ Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
+| `OPENAI_API_KEY` | Yes | — | OpenAI API key (used for Whisper transcription) |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
+| `SERMON_BASE_URL` | Yes | — | Base URL for the sermon API and audio files (e.g. `https://sermons-api.example.com`) |
 | `MINISTRY_NAME` | No | `the church` | Used in UI titles and AI system prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap for ingested audio |
-| `WHISPER_MODEL` | No | `medium.en` | Must match the model compiled into the Docker image |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chat synthesis |
+| `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
 | `LOG_LEVEL` | No | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
+| `R2_ACCOUNT_ID` | No | — | Cloudflare account ID; required for Litestream R2 replication |
+| `R2_ACCESS_KEY_ID` | No | — | R2 access key ID; required for Litestream R2 replication |
+| `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key; required for Litestream R2 replication |
+| `R2_BUCKET` | No | — | R2 bucket name; replication is skipped entirely if any R2 var is unset |
 
-Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` + `ADMIN_SECRET` before running.
+Copy `.env.example` to `.env` and fill in the required variables before running.
 
 ---
 
 ## Architecture principles
 
 - **No connection pooling** — SQLite via a single `better-sqlite3` singleton (`src/db/connection.ts`); all modules import the same instance.
-- **Sequential ingestion** — the job queue runs one job at a time to avoid concurrent Whisper processes.
+- **Sequential ingestion** — the job queue runs one job at a time to prevent concurrent downloads and API calls.
 - **Retry resume** — if chunking fails after transcription, re-ingesting the same URL resumes from the stored transcription (skips download + Whisper).
 - **Embeddings stored, not queried** — 384-dim Float32 vectors are stored in `chunks.embedding BLOB` for future vector search. FTS5 is used for all current search.
 - **Retry wrapper** — all Anthropic API calls in `src/mcp/server.ts` go through `withRetry()` (`src/retry.ts`); exponential backoff on 429/5xx.
@@ -89,7 +95,9 @@ Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` + `ADMIN_SECRET` b
 
 ### Ingestion pipeline
 - The pipeline (`src/ingestion/pipeline.ts`) uses a `try/finally` to delete temp files — always preserve this pattern when adding steps.
-- `insertPartialSermon` → chunk → `completeSermon` is the retry-safe pattern; do not collapse it into a single write.
+- `insertPartialSermon` → `insertTranscription` → chunk → `completeSermon` is the retry-safe pattern; do not collapse it into a single write.
+- Transcripts are stored in the `transcriptions` table (one-to-one with `sermons` via `sermon_id` FK) to keep `sermons` queries fast.
+- Resume logic checks `transcriptions` table first, falls back to `sermons.transcription` for backward compat with older rows.
 - Surface job progress as **structured state, not log lines.** Report sub-steps via the `onPhase` reporter (which the queue maps to the job's `phase` field), and keep per-step `logger` calls at `debug`. This keeps default `info` logs quiet while the status dashboard stays informative.
 
 ### Job queue

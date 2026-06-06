@@ -8,6 +8,7 @@ export function chatHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${ministry}</title>
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -30,8 +31,8 @@ export function chatHtml(): string {
       justify-content: space-between;
       flex-shrink: 0;
     }
-    .header-logo { height: 28px; width: auto; display: block; }
-    .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; }
+    .header-logo { height: 28px; width: auto; display: block; margin: 0 auto; }
+    .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; }
 
     .new-btn {
       background: none;
@@ -278,7 +279,7 @@ export function chatHtml(): string {
   })
 
   sendBtn.addEventListener('click', send)
-  newBtn.addEventListener('click', function () { if (!busy) location.reload() })
+  newBtn.addEventListener('click', function () { if (!busy) window.open(location.href, '_blank') })
 
   // ── Helpers ─────────────────────────────────────────────────────────────
   function scroll() { msgList.scrollTop = msgList.scrollHeight }
