@@ -8,6 +8,7 @@ export function chatHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${ministry}</title>
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
   <style>
