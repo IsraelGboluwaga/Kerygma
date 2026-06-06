@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { enqueue, getJob, getRecentJobs, getQueueDepth } from '../queue.js'
 import { ingestSermon, type IngestRequest } from '../ingestion/pipeline.js'
+import { syncFromApi } from '../scheduler.js'
 import { searchChunks } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
@@ -44,7 +45,7 @@ function checkRateLimit(ip: string): boolean {
   return true
 }
 
-const MAX_QUEUE_DEPTH = 50
+const MAX_QUEUE_DEPTH = 500
 
 export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
@@ -183,6 +184,7 @@ export function createRouter(anthropic: Anthropic): Hono {
   app.use('/admin/ingest', adminMiddleware)
   app.use('/admin/jobs', adminMiddleware)
   app.use('/admin/jobs/:id', adminMiddleware)
+  app.use('/admin/sync-api', adminMiddleware)
 
   app.post('/admin/ingest', async (c) => {
     let req: IngestRequest
@@ -219,6 +221,11 @@ export function createRouter(anthropic: Anthropic): Hono {
     const job = getJob(c.req.param('id'))
     if (!job) return c.json({ error: 'Job not found' }, 404)
     return c.json(job)
+  })
+
+  app.post('/admin/sync-api', async (c) => {
+    void syncFromApi(anthropic)
+    return c.json({ ok: true, message: 'API sync started in background' }, 202)
   })
 
   // ── DB Browser UI + data API ───────────────────────────────────────────
