@@ -282,12 +282,12 @@ chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 
 ```bash
 yarn dev            # run with tsx watch (needs cmake + ffmpeg + whisper model on host)
-yarn build          # tsc → dist/
+yarn build          # esbuild → dist/ (fast transpile, no type check)
+yarn typecheck      # tsc --noEmit (full type check)
 yarn start          # node dist/main.js
 yarn test           # vitest run — 58 tests
 yarn test:watch     # vitest in watch mode
 yarn test:coverage  # vitest with v8 coverage report
-yarn typecheck      # tsc --noEmit
 ```
 
 For iterating on code without rebuilding the full Docker image, `yarn dev` is faster — but you need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`).

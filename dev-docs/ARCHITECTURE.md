@@ -356,8 +356,7 @@ The image uses a two-stage build to keep the runtime image small:
 Stage 1 — builder (node:20, Debian Bookworm)
     apt-get install build-essential python3  ← compile better-sqlite3 native addon
     yarn install --frozen-lockfile
-    NODE_OPTIONS=--max-old-space-size=4096   ← tsc needs >2GB heap
-    yarn build                               ← tsc → dist/
+    yarn build                               ← esbuild → dist/ (transpile only, no type check)
 
 Stage 2 — runtime (node:20-slim, same Debian Bookworm)
     apt-get install ffmpeg           ← re-encodes audio > 25 MB before Whisper API upload

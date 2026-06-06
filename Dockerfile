@@ -13,7 +13,7 @@ COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile
 
 COPY . .
-RUN NODE_OPTIONS=--max-old-space-size=8192 yarn build
+RUN yarn build
 
 
 # ── Runtime stage ──────────────────────────────────────────────────────────────
