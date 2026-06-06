@@ -12,20 +12,23 @@ import { searchChunks } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
-import { adminHtml } from './adminHtml.js'
-import { dbHtml } from './dbHtml.js'
-import { chatHtml } from './chatHtml.js'
 import { getDb } from '../db/connection.js'
 
-const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
+const SERVER_DIR = fileURLToPath(new URL('.', import.meta.url))
+const PROJECT_ROOT = join(SERVER_DIR, '..', '..')
+const CLIENT_DIST = join(PROJECT_ROOT, 'client', 'dist')
+const IS_PROD = process.env.NODE_ENV === 'production'
 
 const MIME: Record<string, string> = {
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
+  '.svg':  'image/svg+xml',
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
-  '.ico': 'image/x-icon',
+  '.ico':  'image/x-icon',
+  '.js':   'application/javascript',
+  '.css':  'text/css',
+  '.woff2': 'font/woff2',
 }
 
 // Simple in-memory rate limiter: 30 requests/min per IP on the chat endpoint
@@ -50,27 +53,12 @@ const MAX_QUEUE_DEPTH = 500
 export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
 
-  // ── Static assets ──────────────────────────────────────────────────────
-  app.get('/favicon.ico', (c) => c.redirect('/assets/favicon.png', 301))
-
-  app.get('/assets/:file', (c) => {
-    const file = c.req.param('file')
-    try {
-      const data = readFileSync(join(ASSETS_DIR, file))
-      const mime = MIME[extname(file)] ?? 'application/octet-stream'
-      return new Response(data, { headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' } })
-    } catch {
-      return c.notFound()
-    }
-  })
-
   // ── Health ─────────────────────────────────────────────────────────────
+  app.get('/api/health', (c) => c.json({ ok: true }))
   app.get('/health', (c) => c.json({ ok: true }))
 
-  // ── Chat ───────────────────────────────────────────────────────────────
-  app.get('/', (c) => c.html(chatHtml()))
-
-  app.post('/', async (c) => {
+  // ── Chat API ───────────────────────────────────────────────────────────
+  app.post('/api/chat', async (c) => {
     const ip = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip') ?? 'unknown'
     if (!checkRateLimit(ip)) {
       return c.json({ error: 'Too many requests' }, 429)
@@ -176,17 +164,11 @@ export function createRouter(anthropic: Anthropic): Hono {
     await next()
   }
 
-  // ── Admin UI ───────────────────────────────────────────────────────────
-  app.get('/admin', (c) => {
-    return c.html(adminHtml())
-  })
+  app.use('/api/admin/*', adminMiddleware)
+  app.use('/api/db/*', adminMiddleware)
 
-  app.use('/admin/ingest', adminMiddleware)
-  app.use('/admin/jobs', adminMiddleware)
-  app.use('/admin/jobs/:id', adminMiddleware)
-  app.use('/admin/sync-api', adminMiddleware)
-
-  app.post('/admin/ingest', async (c) => {
+  // ── Admin API ──────────────────────────────────────────────────────────
+  app.post('/api/admin/ingest', async (c) => {
     let req: IngestRequest
     try {
       req = await c.req.json<IngestRequest>()
@@ -213,29 +195,25 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.json({ jobId }, 202)
   })
 
-  app.get('/admin/jobs', (c) => {
+  app.get('/api/admin/jobs', (c) => {
     return c.json(getRecentJobs(50))
   })
 
-  app.get('/admin/jobs/:id', (c) => {
+  app.get('/api/admin/jobs/:id', (c) => {
     const job = getJob(c.req.param('id'))
     if (!job) return c.json({ error: 'Job not found' }, 404)
     return c.json(job)
   })
 
-  app.post('/admin/sync-api', async (c) => {
+  app.post('/api/admin/sync-api', async (c) => {
     void syncFromApi(anthropic)
     return c.json({ ok: true, message: 'API sync started in background' }, 202)
   })
 
-  // ── DB Browser UI + data API ───────────────────────────────────────────
+  // ── DB browser API ─────────────────────────────────────────────────────
   const DB_TABLES = new Set(['sermons', 'chunks', 'jobs'])
 
-  app.get('/lyrical-theology', (c) => c.html(dbHtml()))
-
-  app.use('/lyrical-theology/:table', adminMiddleware)
-
-  app.get('/lyrical-theology/:table', (c) => {
+  app.get('/api/db/:table', (c) => {
     const table = c.req.param('table')
     if (!DB_TABLES.has(table)) {
       return c.json({ error: 'Unknown table' }, 400)
@@ -262,6 +240,34 @@ export function createRouter(anthropic: Anthropic): Hono {
 
     return c.json({ columns, rows, total: count, limit, offset })
   })
+
+  // ── Static assets + SPA (production only) ─────────────────────────────
+  if (IS_PROD) {
+    app.get('/favicon.ico', (c) => c.redirect('/assets/favicon.png', 301))
+
+    app.get('/assets/:file+', (c) => {
+      const file = c.req.param('file')
+      try {
+        const data = readFileSync(join(CLIENT_DIST, 'assets', file))
+        const mime = MIME[extname(file)] ?? 'application/octet-stream'
+        const isHashed = /\.[a-f0-9]{8,}\./.test(file)
+        const cc = isHashed
+          ? 'public, max-age=31536000, immutable'
+          : 'public, max-age=86400'
+        return new Response(data, { headers: { 'Content-Type': mime, 'Cache-Control': cc } })
+      } catch {
+        return c.notFound()
+      }
+    })
+
+    const indexHtml = (() => {
+      try { return readFileSync(join(CLIENT_DIST, 'index.html'), 'utf-8') } catch { return null }
+    })()
+
+    if (indexHtml) {
+      app.get('*', (c) => c.html(indexHtml))
+    }
+  }
 
   return app
 }
