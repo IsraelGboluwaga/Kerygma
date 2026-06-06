@@ -18,6 +18,10 @@ import { downloadMp3 } from './downloader.js'
 import { transcribeAudio } from './transcriber.js'
 import { chunkSermon } from './chunker.js'
 import { generateEmbedding } from './embedder.js'
+import type { JobPhase } from '../queue.js'
+
+/** Optional progress reporter; ingestion runs fine when omitted (e.g. in tests). */
+export type PhaseReporter = (phase: JobPhase) => void
 
 export interface IngestRequest {
   videoId?: string         // API-provided stable ID; falls back to SHA256(downloadUrl)
@@ -69,12 +73,15 @@ async function chunkEmbedSave(
   sermonId: number,
   title: string,
   segments: TranscriptSegment[],
-  anthropic: Anthropic
+  anthropic: Anthropic,
+  onPhase?: PhaseReporter
 ): Promise<number> {
-  logger.info(`Chunking "${title}" with Claude...`)
+  onPhase?.('chunking')
+  logger.debug(`Chunking "${title}" with Claude...`)
   const chunks = await chunkSermon(segments, anthropic)
 
-  logger.info(`Embedding ${chunks.length} chunk(s) for "${title}"...`)
+  onPhase?.('embedding')
+  logger.debug(`Embedding ${chunks.length} chunk(s) for "${title}"...`)
   const chunksWithEmbeddings = await Promise.all(
     chunks.map(async (c) => ({
       ...c,
@@ -101,7 +108,8 @@ async function chunkEmbedSave(
 
 export async function ingestSermon(
   req: IngestRequest,
-  anthropic: Anthropic
+  anthropic: Anthropic,
+  onPhase?: PhaseReporter
 ): Promise<IngestResult> {
   const videoId = req.videoId ?? makeVideoId(req.downloadUrl)
   const title = req.title || defaultTitle(req.downloadUrl)
@@ -118,7 +126,7 @@ export async function ingestSermon(
         throw new Error('Partial record found but no transcription data available')
       }
       const segments = JSON.parse(segmentsJson) as TranscriptSegment[]
-      const chunkCount = await chunkEmbedSave(existing.id, title, segments, anthropic)
+      const chunkCount = await chunkEmbedSave(existing.id, title, segments, anthropic, onPhase)
       return {
         status: 'ok',
         message: `Ingested "${title}" — ${chunkCount} chunk(s)`,
@@ -142,9 +150,11 @@ export async function ingestSermon(
   let cleanup: (() => void) | undefined
 
   try {
+    onPhase?.('downloading')
     const download = await downloadMp3(req.downloadUrl)
     cleanup = download.cleanup
 
+    onPhase?.('transcribing')
     logger.info(`Transcribing "${title}"...`)
     const { segments, duration, transcript } = await transcribeAudio(download.filePath)
 
@@ -174,7 +184,7 @@ export async function ingestSermon(
 
     insertTranscription(sermonId, transcript, JSON.stringify(segments))
 
-    const chunkCount = await chunkEmbedSave(sermonId, title, segments, anthropic)
+    const chunkCount = await chunkEmbedSave(sermonId, title, segments, anthropic, onPhase)
 
     return {
       status: 'ok',

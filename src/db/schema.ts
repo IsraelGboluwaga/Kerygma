@@ -45,6 +45,7 @@ export function initDb(db: Database.Database): void {
       download_url TEXT,
       payload      TEXT,
       status       TEXT NOT NULL DEFAULT 'queued',
+      phase        TEXT,
       message      TEXT,
       error        TEXT,
       created_at   TEXT NOT NULL,
@@ -135,5 +136,8 @@ export function initDb(db: Database.Database): void {
 
   if (!jobColNames.has('payload')) {
     db.exec(`ALTER TABLE jobs ADD COLUMN payload TEXT`)
+  }
+  if (!jobColNames.has('phase')) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN phase TEXT`)
   }
 }

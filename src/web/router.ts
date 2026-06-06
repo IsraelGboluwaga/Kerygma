@@ -5,13 +5,14 @@ import { readFileSync } from 'fs'
 import { join, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
-import { getRecentJobs, getQueueDepth } from '../queue.js'
+import { getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
 import { syncFromApi } from '../scheduler.js'
 import { searchChunks, getConfig, countSermons } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
 import { adminHtml } from './adminHtml.js'
+import { statusHtml } from './statusHtml.js'
 import { dbHtml } from './dbHtml.js'
 import { chatHtml } from './chatHtml.js'
 import { getDb } from '../db/connection.js'
@@ -49,6 +50,7 @@ export function createRouter(anthropic: Anthropic): Hono {
 
   // ── Static assets ──────────────────────────────────────────────────────
   app.get('/favicon.ico', (c) => c.redirect('/assets/favicon.png', 301))
+
 
   app.get('/assets/:file', (c) => {
     const file = c.req.param('file')
@@ -178,8 +180,12 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.html(adminHtml())
   })
 
+  // Live phase/queue dashboard — public HTML, data endpoint is protected
+  app.get('/admin/live', (c) => c.html(statusHtml()))
+
   app.use('/admin/jobs', adminMiddleware)
   app.use('/admin/status', adminMiddleware)
+  app.use('/admin/status/data', adminMiddleware)
   app.use('/admin/sync-api', adminMiddleware)
 
   app.get('/admin/jobs', (c) => {
@@ -232,6 +238,15 @@ export function createRouter(anthropic: Anthropic): Hono {
     })
 
     return c.json({ columns, rows, total: count, limit, offset })
+  })
+
+  // Snapshot for the live status dashboard: recent jobs (queued ones carry
+  // their 1-based queue position) plus current queue depth.
+  app.get('/admin/status/data', (c) => {
+    const jobs = getRecentJobs(50).map((job) =>
+      job.status === 'queued' ? { ...job, position: getQueuePosition(job.id) } : job
+    )
+    return c.json({ queueDepth: getQueueDepth(), jobs })
   })
 
   return app

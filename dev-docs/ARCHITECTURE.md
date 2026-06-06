@@ -13,10 +13,12 @@ Browser (Member)
     │  POST /              → SSE stream (Claude answer)
     ▼
 Browser (Admin)
-    │  GET  /admin         → Admin UI (HTML, password-gated)
-    │  POST /admin/ingest  → Enqueue job → 202 + jobId  (JSON body)
-    │  GET  /admin/jobs    → List recent job statuses
-    │  GET  /admin/jobs/:id→ Poll a single job
+    │  GET  /admin             → Admin UI (HTML, password-gated)
+    │  GET  /admin/status      → Live status dashboard (HTML)
+    │  POST /admin/ingest      → Enqueue job → 202 + jobId  (JSON body)
+    │  GET  /admin/jobs        → List recent job statuses
+    │  GET  /admin/jobs/:id    → Poll a single job
+    │  GET  /admin/status/data → Live queue + phase snapshot (JSON)
     ▼
 Hono HTTP Server (:3000)
     └── GET /health        → { ok: true }
@@ -162,10 +164,13 @@ Also exports `syncFromApi(anthropic)` for use by the manual `POST /admin/sync-ap
 In-process FIFO queue. Jobs are held in a `Map<string, Job>` (in-memory) and persisted to
 the `jobs` DB table so history survives server restarts.
 - `enqueue(fn, meta)` → UUID — pushes a job with title, downloadUrl, and payload (JSON of the original request for retries), triggers `drain()` if nothing is running
-- `drain()` — pops jobs one at a time; a failed job logs the error and moves on to the next
+- `drain()` — pops jobs one at a time; passes each fn a `JobContext` whose `setPhase(phase)` updates and persists the running job's `phase` (cleared on terminal states); a failed job logs the error and moves on to the next
 - `getJob(id)` — checks in-memory first, falls back to DB for jobs from previous runs
 - `getRecentJobs(n)` — reads from DB, overlays in-memory state for active jobs
+- `getQueuePosition(id)` — 1-based position of a job still waiting in line, else null
 - `waitUntilIdle()` — used during graceful shutdown
+
+Job phases (`downloading` → `transcribing` → `chunking` → `embedding`) are reported by the ingestion pipeline through the `setPhase` callback, giving the status dashboard live sub-step visibility without adding log volume.
 
 ### `src/mcp/server.ts`
 `createMcpServer(anthropic)` — accepts an injected Anthropic client.
@@ -191,6 +196,14 @@ Returns the HTML string for the admin page. Contains:
 - Client-side JS that `fetch`-POSTs JSON with `X-Admin-Secret` header, resets the form immediately after queuing so the next sermon can be entered without waiting
 - Polls `/admin/jobs/:id` every 3s until terminal state; skips redundant DOM updates when status hasn't changed
 - A live job history table with Retry buttons for failed jobs that have not since succeeded
+- A "Live status →" link to the status dashboard
+
+### `src/web/statusHtml.ts`
+Returns the HTML string for the read-only status dashboard (`GET /admin/status`). Contains:
+- A password field (remembered in `sessionStorage`) so it can be shared with the admin page
+- A "Now Processing" phase stepper (Download → Transcribe → Chunk → Embed) for the currently running job, driven by the job's `phase` field
+- A queue list showing each waiting job's 1-based position, plus a recent-jobs table
+- Client-side JS that polls `GET /admin/status/data` every 2s — progress lives in structured job state, not in the logs
 
 ### `src/web/router.ts`
 Hono app wiring all routes:
@@ -199,12 +212,13 @@ Hono app wiring all routes:
 - `GET /` — serves the chat UI
 - `POST /` — accepts `{ messages }`, searches chunks using the last user message (FTS5, stopword-filtered, OR semantics), builds a system prompt with matching excerpts (title | speaker | date | timestamp | URL), streams a Claude SSE response
 
-**Admin (`/admin/*`)** — all write routes protected by `X-Admin-Secret` middleware
+**Admin (`/admin/*`)** — write/data routes protected by `X-Admin-Secret` middleware; the two HTML pages (`/admin`, `/admin/status`) are public and prompt for the secret client-side
 - `GET /admin` — serves the admin UI
-- `POST /admin/ingest` — validates JSON body, enqueues pipeline job, returns `{ jobId }` (202)
+- `GET /admin/live` — serves the live phase/queue status dashboard (HTML)
 - `POST /admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202)
 - `GET /admin/jobs` — returns recent job list (up to 50)
 - `GET /admin/jobs/:id` — returns single job status
+- `GET /admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position`
 
 ### `src/main.ts`
 Sequential startup:
@@ -338,6 +352,7 @@ CREATE TABLE jobs (
     download_url TEXT,
     payload      TEXT,                  -- JSON of original IngestRequest (for retry)
     status       TEXT NOT NULL DEFAULT 'queued',  -- 'queued' | 'running' | 'done' | 'failed'
+    phase        TEXT,                  -- running sub-step: 'downloading'|'transcribing'|'chunking'|'embedding'
     message      TEXT,                  -- success/failure summary
     error        TEXT,                  -- error message on failure
     created_at   TEXT NOT NULL,

@@ -30,7 +30,9 @@ export function adminHtml(): string {
     .top-bar-logo { height: 22px; width: auto; display: block; }
     .top-bar-divider { width: 1px; height: 20px; background: #2a2a2a; }
     .subtitle { color: #555; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
-    .content { flex: 1; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; max-width: 1100px; width: 100%; }
+    .top-bar a.live-link { margin-left: auto; color: #666; font-size: 0.8rem; text-decoration: none; }
+    .top-bar a.live-link:hover { color: #df4e4e; }
+    .content { flex: 1; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; width: 100%; }
     .card {
       background: #0d0d0d;
       border: 1px solid #1f1f1f;
@@ -98,6 +100,7 @@ export function adminHtml(): string {
   <img class="top-bar-logo" src="/assets/cci_logo.svg" alt="${ministry}" />
   <div class="top-bar-divider"></div>
   <div class="subtitle">Ingestion Status</div>
+  <a class="live-link" href="/admin/live">Live status →</a>
 </div>
 
 <div class="content">

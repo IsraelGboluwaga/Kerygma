@@ -98,6 +98,11 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - `insertPartialSermon` → `insertTranscription` → chunk → `completeSermon` is the retry-safe pattern; do not collapse it into a single write.
 - Transcripts are stored in the `transcriptions` table (one-to-one with `sermons` via `sermon_id` FK) to keep `sermons` queries fast.
 - Resume logic checks `transcriptions` table first, falls back to `sermons.transcription` for backward compat with older rows.
+- Surface job progress as **structured state, not log lines.** Report sub-steps via the `onPhase` reporter (which the queue maps to the job's `phase` field), and keep per-step `logger` calls at `debug`. This keeps default `info` logs quiet while the status dashboard stays informative.
+
+### Job queue
+- The queue (`src/queue.ts`) owns all job state. A job fn receives a `JobContext`; report progress with `ctx.setPhase(...)` rather than mutating job records elsewhere.
+- `phase` is meaningful only while `status === 'running'`; the queue clears it on terminal states.
 
 ### MCP tools
 - MCP tools must remain **read-only** — no writes from `src/mcp/server.ts`.

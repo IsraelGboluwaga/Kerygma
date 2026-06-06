@@ -254,6 +254,7 @@ export interface JobRow {
   download_url: string | null
   payload: string | null
   status: string
+  phase: string | null
   message: string | null
   error: string | null
   created_at: string
@@ -267,6 +268,7 @@ export function upsertJob(job: {
   download_url?: string
   payload?: string
   status: string
+  phase?: string
   message?: string
   error?: string
   createdAt: Date
@@ -275,10 +277,11 @@ export function upsertJob(job: {
 }): void {
   getDb()
     .prepare(
-      `INSERT INTO jobs (id, title, download_url, payload, status, message, error, created_at, started_at, completed_at)
-       VALUES (@id, @title, @download_url, @payload, @status, @message, @error, @created_at, @started_at, @completed_at)
+      `INSERT INTO jobs (id, title, download_url, payload, status, phase, message, error, created_at, started_at, completed_at)
+       VALUES (@id, @title, @download_url, @payload, @status, @phase, @message, @error, @created_at, @started_at, @completed_at)
        ON CONFLICT(id) DO UPDATE SET
          status       = excluded.status,
+         phase        = excluded.phase,
          message      = excluded.message,
          error        = excluded.error,
          started_at   = excluded.started_at,
@@ -290,6 +293,7 @@ export function upsertJob(job: {
       download_url: job.download_url ?? null,
       payload: job.payload ?? null,
       status: job.status,
+      phase: job.phase ?? null,
       message: job.message ?? null,
       error: job.error ?? null,
       created_at: job.createdAt.toISOString(),
