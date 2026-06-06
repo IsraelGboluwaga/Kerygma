@@ -97,11 +97,11 @@ export interface SaveChunkInput {
   embedding?: Buffer
 }
 
-export function saveSermon(data: SaveSermonInput): number {
+function insertSermonRow(data: SaveSermonInput, status: 'done' | 'transcribed'): number {
   const result = getDb()
     .prepare(
       `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, description, ingestion_status)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, @description, 'done')`
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, @description, @status)`
     )
     .run({
       video_id: data.video_id,
@@ -114,29 +114,17 @@ export function saveSermon(data: SaveSermonInput): number {
       tags: data.tags ? JSON.stringify(data.tags) : null,
       series: data.series ?? null,
       description: data.description ?? null,
+      status,
     })
   return result.lastInsertRowid as number
 }
 
+export function saveSermon(data: SaveSermonInput): number {
+  return insertSermonRow(data, 'done')
+}
+
 export function insertPartialSermon(data: InsertPartialSermonInput): number {
-  const result = getDb()
-    .prepare(
-      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, description, ingestion_status)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, @description, 'transcribed')`
-    )
-    .run({
-      video_id: data.video_id,
-      title: data.title,
-      date: data.date,
-      download_url: data.download_url,
-      webpage_url: data.webpage_url ?? null,
-      speaker: data.speaker ?? null,
-      duration: data.duration,
-      tags: data.tags ? JSON.stringify(data.tags) : null,
-      series: data.series ?? null,
-      description: data.description ?? null,
-    })
-  return result.lastInsertRowid as number
+  return insertSermonRow(data, 'transcribed')
 }
 
 export function completeSermon(id: number): void {

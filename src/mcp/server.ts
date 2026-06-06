@@ -55,6 +55,17 @@ function resolveSpeaker(filter: string): SpeakerResolution {
   return { ok: true, name: matches[0] }
 }
 
+type SpeakerFilterResult =
+  | { ok: true; name: string | undefined }
+  | { ok: false; response: { content: [{ type: 'text'; text: string }] } }
+
+function resolveSpeakerFilter(filter: string | undefined): SpeakerFilterResult {
+  if (!filter) return { ok: true, name: undefined }
+  const resolution = resolveSpeaker(filter)
+  if (!resolution.ok) return { ok: false, response: { content: [{ type: 'text', text: resolution.message }] } }
+  return { ok: true, name: resolution.name }
+}
+
 function nearestDateMessage(date: string): string {
   const nearest = getNearestSermonByDate(date)
   if (!nearest) return `No sermons found for date: ${date}`
@@ -155,14 +166,9 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
     },
     // @ts-expect-error — TS2589: handler return type inference too deep
     async ({ question, date_filter, speaker_filter }: { question: string; date_filter?: string; speaker_filter?: string }) => {
-      let resolvedSpeaker: string | undefined
-      if (speaker_filter) {
-        const resolution = resolveSpeaker(speaker_filter)
-        if (!resolution.ok) {
-          return { content: [{ type: 'text', text: resolution.message }] }
-        }
-        resolvedSpeaker = resolution.name
-      }
+      const sf = resolveSpeakerFilter(speaker_filter)
+      if (!sf.ok) return sf.response
+      const resolvedSpeaker = sf.name
 
       let results: ChunkWithSermon[]
 
@@ -232,14 +238,9 @@ If the excerpts don't contain enough information to answer, say so.`,
     },
     // @ts-expect-error — TS2589: handler return type inference too deep
     async ({ date, speaker, summary_type }: { date: string; speaker?: string; summary_type: 'brief' | 'comprehensive' }) => {
-      let resolvedSpeaker: string | undefined
-      if (speaker) {
-        const resolution = resolveSpeaker(speaker)
-        if (!resolution.ok) {
-          return { content: [{ type: 'text', text: resolution.message }] }
-        }
-        resolvedSpeaker = resolution.name
-      }
+      const sf = resolveSpeakerFilter(speaker)
+      if (!sf.ok) return sf.response
+      const resolvedSpeaker = sf.name
 
       const dateResult = fetchChunksByDateAndSpeaker(date, resolvedSpeaker)
       if (!dateResult.ok) return dateResult
@@ -303,14 +304,9 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
         .describe('Optional speaker name to filter by'),
     },
     async ({ topic, speaker_filter }: { topic: string; speaker_filter?: string }) => {
-      let resolvedSpeaker: string | undefined
-      if (speaker_filter) {
-        const resolution = resolveSpeaker(speaker_filter)
-        if (!resolution.ok) {
-          return { content: [{ type: 'text', text: resolution.message }] }
-        }
-        resolvedSpeaker = resolution.name
-      }
+      const sf = resolveSpeakerFilter(speaker_filter)
+      if (!sf.ok) return sf.response
+      const resolvedSpeaker = sf.name
 
       let results = searchChunks(topic, 20)
 
