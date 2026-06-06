@@ -98,6 +98,9 @@ Typed functions for every DB operation:
 - `getChunksBySermonId(id)` → `ChunkRow[]`
 - `searchChunks(query, limit)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance
 - `listSermons(limit)` → `SermonRow[]`
+- `upsertTheme(theme)` → `number` — inserts/updates a theme keyed on its upstream id, returns the local `themes.id`
+- `getSermonsByTheme(themeId)` → `SermonRow[]` — all sermons for an upstream theme id, newest first
+- `listThemes()` → `ThemeRow[]`
 - `upsertJob` / `getJobRow` / `listRecentJobRows` / `failStaleJobs` — job persistence
 
 ### `src/ingestion/downloader.ts`
@@ -113,8 +116,9 @@ Returns `{ segments: TranscriptSegment[], duration: number, transcript: string }
 
 ### `src/ingestion/api-source.ts`
 Paginates through the sermon REST API at `${SERMON_BASE_URL}/sermons` (50 per page).
-Maps each API sermon `{ _id, title, preacher, sermon_date, audio_info, theme, tags, description_string }`
+Maps each API sermon `{ _id, title, preacher, sermon_date, audio_info, theme, tags, excerpt, description_string }`
 to an `IngestRequest`. Audio URLs that are relative paths are prefixed with `AUDIO_BASE_URL`.
+The API `theme` (`{ _id, name, slug }`) is carried through only when it has both an `_id` and a `name`.
 Exported as an async generator: `fetchAllSermons(): AsyncGenerator<IngestRequest>`.
 
 ### `src/ingestion/chunker.ts`
@@ -148,9 +152,10 @@ Returns `{ status: 'ok' | 'duplicate' | 'too_long' | 'error', message, sermonId?
 
 Input:
 ```ts
-{ videoId?, downloadUrl, webpageUrl?, title, speaker, date, series?, tags?, description? }
+{ videoId?, downloadUrl, webpageUrl?, title, speaker, date, excerpt?, theme?, tags?, description? }
 ```
-`series` is stored as `${series}-${year}` (e.g. `Faith Foundations-2024`). Speaker is required.
+`theme` is `{ themeId, name, slug? }`; on insert it is upserted into the `themes` table (keyed on the
+upstream `themeId`) and the sermon stores the resulting `themes.id` as `theme_id`. Speaker is required.
 
 ### `src/scheduler.ts`
 On startup, calls `syncFromApi()` immediately so a fresh deploy doesn't wait up to 10 hours for
@@ -309,6 +314,15 @@ e.g. ask_church("What was taught about faith?")
 ## Database Schema
 
 ```sql
+-- One row per theme; keyed on the upstream API theme id so links survive renames
+CREATE TABLE themes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id   TEXT UNIQUE NOT NULL,  -- upstream API theme _id
+    name       TEXT NOT NULL,
+    slug       TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- One row per MP3
 CREATE TABLE sermons (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,7 +332,8 @@ CREATE TABLE sermons (
     download_url     TEXT NOT NULL,         -- original MP3 URL
     webpage_url      TEXT,                  -- optional source page
     speaker          TEXT NOT NULL,         -- required
-    series           TEXT,                  -- e.g. "Faith Foundations-2024"
+    excerpt          TEXT,                  -- short summary from the listing API
+    theme_id         INTEGER REFERENCES themes(id),  -- FK to themes
     description      TEXT,                  -- from API description_string
     duration         INTEGER,               -- seconds
     tags             TEXT,                  -- JSON array

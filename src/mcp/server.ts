@@ -105,7 +105,7 @@ function fetchChunksByDateAndSpeaker(
     ok: true,
     chunks: chunks.map((c) => {
       const s = sermonMap.get(c.sermon_id)!
-      return { ...c, sermon_title: s.title, date: s.date, download_url: s.download_url, webpage_url: s.webpage_url, speaker: s.speaker, series: s.series ?? null }
+      return { ...c, sermon_title: s.title, date: s.date, download_url: s.download_url, webpage_url: s.webpage_url, speaker: s.speaker, theme: s.theme ?? null }
     }),
   }
 }
@@ -141,7 +141,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
       const text = rows
         .map(
           (r) =>
-            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}${r.series ? `\n  Series: ${r.series}` : ''}${r.webpage_url ? `\n  Watch: ${r.webpage_url}` : ''}`
+            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}${r.theme ? `\n  Theme: ${r.theme}` : ''}${r.webpage_url ? `\n  Watch: ${r.webpage_url}` : ''}`
         )
         .join('\n\n')
 
@@ -341,7 +341,7 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
             `Sermon: ${sermonTitle}\n` +
             `Date: ${first.date}\n` +
             `Speaker: ${first.speaker ?? 'Unknown'}\n` +
-            (first.series ? `Series: ${first.series}\n` : '') +
+            (first.theme ? `Theme: ${first.theme}\n` : '') +
             (first.webpage_url ? `Watch: ${first.webpage_url}\n` : '') +
             `Relevant sections:\n${sections}`
           )
