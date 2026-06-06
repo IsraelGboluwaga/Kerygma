@@ -9,7 +9,6 @@ export function adminHtml(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${ministry} — Admin</title>
   <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
