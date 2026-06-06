@@ -22,11 +22,13 @@ FROM node:20-slim AS runtime
 # ffmpeg: re-encodes audio files > 25 MB before Whisper API upload
 # libstdc++6 + libgomp1: C++ runtime required by better-sqlite3
 #   (present in node:20 but stripped from node:20-slim)
+# ca-certificates: required for curl SSL verification (stripped from node:20-slim)
 # curl: used to download the Litestream binary below
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libstdc++6 \
     libgomp1 \
+    ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
