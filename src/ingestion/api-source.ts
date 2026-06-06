@@ -52,7 +52,7 @@ function mapToIngestRequest(sermon: ApiSermon): IngestRequest {
   const audioPath = sermon.audio_info?.audio_url ?? ''
   const downloadUrl = audioPath.startsWith('http')
     ? audioPath
-    : `${config.SERMON_BASE_URL}${audioPath}`
+    : `${config.AUDIO_BASE_URL}${audioPath}`
 
   return {
     videoId: sermon._id,

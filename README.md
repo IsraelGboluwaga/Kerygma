@@ -252,7 +252,8 @@ What has Apostle Emmanuel Iren said about healing?
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `OPENAI_API_KEY` | Yes | — | OpenAI API key (used for Whisper transcription) |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
-| `SERMON_BASE_URL` | Yes | — | Base URL for the sermon REST API and audio files |
+| `SERMON_BASE_URL` | Yes | — | Base URL for the sermon REST API (used to fetch sermon listings) |
+| `AUDIO_BASE_URL` | Yes | — | Base URL prepended to relative audio paths returned by the sermon API |
 | `MINISTRY_NAME` | No | `the church` | Ministry name shown in the UI and AI prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |
