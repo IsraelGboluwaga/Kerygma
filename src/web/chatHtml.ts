@@ -10,21 +10,69 @@ export function chatHtml(): string {
   <title>${ministry}</title>
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+  <script>(function(){var t=localStorage.getItem('theme')||'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      --bg:       #000;
+      --surface:  #0d0d0d;
+      --input-bg: #0a0a0a;
+      --raised:   #111;
+      --line:     #1f1f1f;
+      --line-2:   #2a2a2a;
+      --tx:       #fff;
+      --tx-2:     #e5e5e5;
+      --tx-muted: #aaa;
+      --tx-sub:   #555;
+      --tx-ghost: #444;
+      --tx-faint: #333;
+      --ph:       #444;
+      --scrub:    #222;
+      --accent:   #df4e4e;
+      --accent-h: #c93c3c;
+      --dis-bg:   #5a2222;
+      --dis-fg:   #8a5555;
+      --err-bg:   #1c0e0e;
+      --err-fg:   #ef8888;
+      --err-bd:   #5a2222;
+    }
+    [data-theme="light"] {
+      --bg:       #fff;
+      --surface:  #f5f5f5;
+      --input-bg: #fafafa;
+      --raised:   #ececec;
+      --line:     #e0e0e0;
+      --line-2:   #d0d0d0;
+      --tx:       #111;
+      --tx-2:     #222;
+      --tx-muted: #555;
+      --tx-sub:   #888;
+      --tx-ghost: #999;
+      --tx-faint: #aaa;
+      --ph:       #bbb;
+      --scrub:    #ccc;
+      --accent:   #df4e4e;
+      --accent-h: #c93c3c;
+      --dis-bg:   #fadadc;
+      --dis-fg:   #b06060;
+      --err-bg:   #fff0f0;
+      --err-fg:   #c02020;
+      --err-bd:   #f0a0a0;
+    }
+
     body {
       font-family: system-ui, -apple-system, sans-serif;
-      background: #000;
-      color: #fff;
+      background: var(--bg);
+      color: var(--tx);
       height: 100dvh;
       display: flex;
       flex-direction: column;
     }
 
     header {
-      background: #000;
-      border-bottom: 1px solid #1f1f1f;
+      background: var(--bg);
+      border-bottom: 1px solid var(--line);
       padding: 0.75rem 1.5rem;
       display: flex;
       align-items: center;
@@ -32,21 +80,37 @@ export function chatHtml(): string {
       flex-shrink: 0;
     }
     .header-logo { height: 28px; width: auto; display: block; margin: 0 auto; }
-    .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; }
+    .subtitle { font-size: 0.72rem; color: var(--tx-sub); margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; }
 
-    .new-btn {
+    .header-right { display: flex; gap: 0.5rem; align-items: center; }
+
+    .theme-toggle-btn {
       background: none;
-      border: 1px solid #333;
+      border: 1px solid var(--line-2);
       border-radius: 6px;
-      padding: 0.35rem 0.8rem;
-      font-size: 0.82rem;
+      padding: 0.35rem 0.7rem;
+      font-size: 0.78rem;
       cursor: pointer;
-      color: #aaa;
+      color: var(--tx-sub);
       font-family: inherit;
       letter-spacing: 0.03em;
       transition: border-color 0.15s, color 0.15s;
     }
-    .new-btn:hover { border-color: #df4e4e; color: #fff; }
+    .theme-toggle-btn:hover { border-color: var(--accent); color: var(--tx); }
+
+    .new-btn {
+      background: none;
+      border: 1px solid var(--tx-faint);
+      border-radius: 6px;
+      padding: 0.35rem 0.8rem;
+      font-size: 0.82rem;
+      cursor: pointer;
+      color: var(--tx-muted);
+      font-family: inherit;
+      letter-spacing: 0.03em;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .new-btn:hover { border-color: var(--accent); color: var(--tx); }
 
     #messages {
       flex: 1;
@@ -58,7 +122,7 @@ export function chatHtml(): string {
     }
     #messages::-webkit-scrollbar { width: 4px; }
     #messages::-webkit-scrollbar-track { background: transparent; }
-    #messages::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+    #messages::-webkit-scrollbar-thumb { background: var(--scrub); border-radius: 2px; }
 
     #empty-state {
       flex: 1;
@@ -67,7 +131,7 @@ export function chatHtml(): string {
       align-items: center;
       justify-content: center;
       gap: 0.6rem;
-      color: #444;
+      color: var(--tx-ghost);
       text-align: center;
     }
     .empty-icon {
@@ -76,7 +140,7 @@ export function chatHtml(): string {
       opacity: 0.2;
       margin-bottom: 0.25rem;
     }
-    #empty-state p { font-size: 0.88rem; letter-spacing: 0.03em; color: #555; }
+    #empty-state p { font-size: 0.88rem; letter-spacing: 0.03em; color: var(--tx-sub); }
 
     .msg-row {
       display: flex;
@@ -94,15 +158,15 @@ export function chatHtml(): string {
       word-break: break-word;
     }
     .user .bubble {
-      background: #df4e4e;
+      background: var(--accent);
       color: #fff;
       border-bottom-right-radius: 4px;
       white-space: pre-wrap;
     }
     .assistant .bubble {
-      background: #111;
-      color: #e5e5e5;
-      border: 1px solid #1f1f1f;
+      background: var(--raised);
+      color: var(--tx-2);
+      border: 1px solid var(--line);
       border-bottom-left-radius: 4px;
     }
     .assistant .bubble p { margin-bottom: 0.6rem; }
@@ -110,24 +174,24 @@ export function chatHtml(): string {
     .assistant .bubble ul,
     .assistant .bubble ol { padding-left: 1.4rem; margin-bottom: 0.6rem; }
     .assistant .bubble li { margin-bottom: 0.2rem; }
-    .assistant .bubble strong { font-weight: 600; color: #fff; }
+    .assistant .bubble strong { font-weight: 600; color: var(--tx); }
     .assistant .bubble h1,
     .assistant .bubble h2,
-    .assistant .bubble h3 { font-weight: 600; color: #fff; margin: 0.6rem 0 0.3rem; }
+    .assistant .bubble h3 { font-weight: 600; color: var(--tx); margin: 0.6rem 0 0.3rem; }
 
     .dots-wrap {
       display: flex;
       gap: 4px;
       align-items: center;
       padding: 0.8rem 1rem;
-      background: #111;
-      border: 1px solid #1f1f1f;
+      background: var(--raised);
+      border: 1px solid var(--line);
       border-radius: 14px;
       border-bottom-left-radius: 4px;
     }
     .dot {
       width: 6px; height: 6px;
-      background: #444;
+      background: var(--tx-ghost);
       border-radius: 50%;
       animation: bounce 1.1s ease-in-out infinite;
     }
@@ -143,7 +207,7 @@ export function chatHtml(): string {
       font-size: 0.78rem;
     }
     details.sources > summary {
-      color: #555;
+      color: var(--tx-sub);
       cursor: pointer;
       list-style: none;
       user-select: none;
@@ -152,7 +216,7 @@ export function chatHtml(): string {
       gap: 0.3rem;
       transition: color 0.15s;
     }
-    details.sources > summary:hover { color: #aaa; }
+    details.sources > summary:hover { color: var(--tx-muted); }
     details.sources > summary::marker,
     details.sources > summary::-webkit-details-marker { display: none; }
     details.sources > summary::before       { content: '▶'; font-size: 0.6rem; }
@@ -160,7 +224,7 @@ export function chatHtml(): string {
     details.sources ul {
       margin-top: 0.35rem;
       padding-left: 1.1rem;
-      color: #555;
+      color: var(--tx-sub);
       list-style: disc;
       display: flex;
       flex-direction: column;
@@ -168,8 +232,8 @@ export function chatHtml(): string {
     }
 
     #input-area {
-      background: #000;
-      border-top: 1px solid #1f1f1f;
+      background: var(--bg);
+      border-top: 1px solid var(--line);
       padding: 0.9rem 1rem;
       flex-shrink: 0;
     }
@@ -182,9 +246,9 @@ export function chatHtml(): string {
     }
     #error-msg {
       padding: 0.5rem 0.8rem;
-      background: #1c0e0e;
-      color: #ef8888;
-      border: 1px solid #5a2222;
+      background: var(--err-bg);
+      color: var(--err-fg);
+      border: 1px solid var(--err-bd);
       border-radius: 6px;
       font-size: 0.83rem;
       display: none;
@@ -197,10 +261,10 @@ export function chatHtml(): string {
     #input {
       flex: 1;
       padding: 0.65rem 0.85rem;
-      border: 1px solid #2a2a2a;
+      border: 1px solid var(--line-2);
       border-radius: 8px;
-      background: #0d0d0d;
-      color: #fff;
+      background: var(--surface);
+      color: var(--tx);
       font-size: 0.93rem;
       font-family: inherit;
       resize: none;
@@ -209,12 +273,12 @@ export function chatHtml(): string {
       overflow-y: auto;
       transition: border-color 0.15s;
     }
-    #input::placeholder { color: #444; }
-    #input:focus   { outline: none; border-color: #df4e4e; }
-    #input:disabled { background: #0a0a0a; color: #333; }
+    #input::placeholder { color: var(--ph); }
+    #input:focus   { outline: none; border-color: var(--accent); }
+    #input:disabled { background: var(--input-bg); color: var(--tx-faint); }
 
     #send-btn {
-      background: #df4e4e;
+      background: var(--accent);
       color: #fff;
       border: none;
       border-radius: 8px;
@@ -226,8 +290,8 @@ export function chatHtml(): string {
       letter-spacing: 0.03em;
       transition: background 0.15s;
     }
-    #send-btn:hover:not(:disabled) { background: #c93c3c; }
-    #send-btn:disabled { background: #5a2222; color: #8a5555; cursor: not-allowed; }
+    #send-btn:hover:not(:disabled) { background: var(--accent-h); }
+    #send-btn:disabled { background: var(--dis-bg); color: var(--dis-fg); cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -237,7 +301,10 @@ export function chatHtml(): string {
     <img class="header-logo" src="/assets/cci_logo.svg" alt="${ministry}" />
     <div class="subtitle">AI Library</div>
   </div>
-  <button class="new-btn" id="new-btn">New conversation</button>
+  <div class="header-right">
+    <button class="theme-toggle-btn" id="theme-toggle">Light</button>
+    <button class="new-btn" id="new-btn">New conversation</button>
+  </div>
 </header>
 
 <div id="messages">
@@ -251,13 +318,26 @@ export function chatHtml(): string {
   <div class="input-inner">
     <div id="error-msg"></div>
     <div class="input-row">
-      <textarea id="input" placeholder="Ask about a sermon\u2026" rows="1"></textarea>
+      <textarea id="input" placeholder="Ask about a sermon…" rows="1"></textarea>
       <button id="send-btn">Send</button>
     </div>
   </div>
 </div>
 
 <script>
+// Theme toggle
+(function(){
+  var btn = document.getElementById('theme-toggle');
+  var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  btn.textContent = cur === 'dark' ? 'Light' : 'Dark';
+  btn.addEventListener('click', function(){
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+    btn.textContent = next === 'dark' ? 'Light' : 'Dark';
+  });
+})();
+
 (function () {
   var messages = []
   var busy     = false
@@ -293,7 +373,7 @@ export function chatHtml(): string {
     busy = on
     inputEl.disabled = on
     sendBtn.disabled = on
-    sendBtn.textContent = on ? '\u2026' : 'Send'
+    sendBtn.textContent = on ? '…' : 'Send'
   }
 
   function showError(text) {
@@ -343,7 +423,7 @@ export function chatHtml(): string {
       var det = document.createElement('details')
       det.className = 'sources'
       var items = sources.map(function (s) {
-        return '<li>' + esc(s.title) + ' \u2014 ' + esc(s.date) + ' [' + esc(s.timestamp) + ']</li>'
+        return '<li>' + esc(s.title) + ' — ' + esc(s.date) + ' [' + esc(s.timestamp) + ']</li>'
       }).join('')
       det.innerHTML = '<summary>Sources (' + sources.length + ')</summary><ul>' + items + '</ul>'
       row.appendChild(det)
