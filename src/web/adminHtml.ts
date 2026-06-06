@@ -31,6 +31,8 @@ export function adminHtml(): string {
     .top-bar-logo { height: 22px; width: auto; display: block; }
     .top-bar-divider { width: 1px; height: 20px; background: #2a2a2a; }
     .subtitle { color: #555; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
+    .top-bar a.status-link { margin-left: auto; color: #666; font-size: 0.8rem; text-decoration: none; }
+    .top-bar a.status-link:hover { color: #df4e4e; }
     .columns {
       flex: 1;
       display: grid;
@@ -120,6 +122,7 @@ export function adminHtml(): string {
   <img class="top-bar-logo" src="/assets/cci_logo.svg" alt="${ministry}" />
   <div class="top-bar-divider"></div>
   <div class="subtitle">Sermon ingestion</div>
+  <a class="status-link" href="/admin/status">Live status →</a>
 </div>
 
 <div class="columns">

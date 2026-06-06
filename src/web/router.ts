@@ -5,13 +5,14 @@ import { readFileSync } from 'fs'
 import { join, extname } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
-import { enqueue, getJob, getRecentJobs, getQueueDepth } from '../queue.js'
+import { enqueue, getJob, getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
 import { ingestSermon, type IngestRequest } from '../ingestion/pipeline.js'
 import { searchChunks } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
 import { adminHtml } from './adminHtml.js'
+import { statusHtml } from './statusHtml.js'
 import { chatHtml } from './chatHtml.js'
 
 const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
@@ -176,9 +177,16 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.html(adminHtml())
   })
 
+  // Live status dashboard — page is public HTML (prompts for secret client-side),
+  // the data endpoint behind it is protected.
+  app.get('/admin/status', (c) => {
+    return c.html(statusHtml())
+  })
+
   app.use('/admin/ingest', adminMiddleware)
   app.use('/admin/jobs', adminMiddleware)
   app.use('/admin/jobs/:id', adminMiddleware)
+  app.use('/admin/status/data', adminMiddleware)
 
   app.post('/admin/ingest', async (c) => {
     let req: IngestRequest
@@ -199,7 +207,7 @@ export function createRouter(anthropic: Anthropic): Hono {
       return c.json({ error: 'Queue is full, try again later' }, 503)
     }
 
-    const jobId = enqueue(() => ingestSermon(req, anthropic), {
+    const jobId = enqueue((ctx) => ingestSermon(req, anthropic, ctx.setPhase), {
       title: req.title,
       downloadUrl: req.downloadUrl,
       payload: JSON.stringify(req),
@@ -215,6 +223,15 @@ export function createRouter(anthropic: Anthropic): Hono {
     const job = getJob(c.req.param('id'))
     if (!job) return c.json({ error: 'Job not found' }, 404)
     return c.json(job)
+  })
+
+  // Snapshot for the live status dashboard: recent jobs (queued ones carry
+  // their 1-based queue position) plus current queue depth.
+  app.get('/admin/status/data', (c) => {
+    const jobs = getRecentJobs(50).map((job) =>
+      job.status === 'queued' ? { ...job, position: getQueuePosition(job.id) } : job
+    )
+    return c.json({ queueDepth: getQueueDepth(), jobs })
   })
 
   return app

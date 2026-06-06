@@ -90,6 +90,11 @@ Copy `.env.example` to `.env` and fill in `ANTHROPIC_API_KEY` + `ADMIN_SECRET` b
 ### Ingestion pipeline
 - The pipeline (`src/ingestion/pipeline.ts`) uses a `try/finally` to delete temp files — always preserve this pattern when adding steps.
 - `insertPartialSermon` → chunk → `completeSermon` is the retry-safe pattern; do not collapse it into a single write.
+- Surface job progress as **structured state, not log lines.** Report sub-steps via the `onPhase` reporter (which the queue maps to the job's `phase` field), and keep per-step `logger` calls at `debug`. This keeps default `info` logs quiet while the status dashboard stays informative.
+
+### Job queue
+- The queue (`src/queue.ts`) owns all job state. A job fn receives a `JobContext`; report progress with `ctx.setPhase(...)` rather than mutating job records elsewhere.
+- `phase` is meaningful only while `status === 'running'`; the queue clears it on terminal states.
 
 ### MCP tools
 - MCP tools must remain **read-only** — no writes from `src/mcp/server.ts`.

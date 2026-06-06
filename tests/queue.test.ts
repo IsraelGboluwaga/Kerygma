@@ -93,4 +93,41 @@ describe('queue', () => {
     await new Promise((r) => setTimeout(r, 80))
     expect(getRecentJobs(2)).toHaveLength(2)
   })
+
+  it('setPhase from the job ctx is reflected on the running job', async () => {
+    const { enqueue, getJob } = await import('../src/queue.js')
+    const id = enqueue(async (ctx) => {
+      ctx.setPhase('transcribing')
+      await new Promise((r) => setTimeout(r, 40))
+      return 'ok'
+    })
+
+    await new Promise((r) => setTimeout(r, 20))
+    const mid = getJob(id)
+    expect(mid!.status).toBe('running')
+    expect(mid!.phase).toBe('transcribing')
+
+    await new Promise((r) => setTimeout(r, 60))
+    const done = getJob(id)
+    expect(done!.status).toBe('done')
+    expect(done!.phase).toBeUndefined() // cleared on terminal state
+  })
+
+  it('queued jobs report a 1-based queue position; running/finished do not', async () => {
+    const { enqueue, getQueuePosition, getQueueDepth } = await import('../src/queue.js')
+    // First job blocks the queue so the rest stay queued
+    const running = enqueue(() => new Promise((r) => setTimeout(() => r('x'), 60)))
+    const second = enqueue(() => Promise.resolve('b'))
+    const third = enqueue(() => Promise.resolve('c'))
+
+    await new Promise((r) => setTimeout(r, 10))
+    expect(getQueuePosition(running)).toBeNull() // already running, not in line
+    expect(getQueuePosition(second)).toBe(1)
+    expect(getQueuePosition(third)).toBe(2)
+    expect(getQueueDepth()).toBe(2)
+
+    await new Promise((r) => setTimeout(r, 120))
+    expect(getQueuePosition(second)).toBeNull() // finished
+    expect(getQueueDepth()).toBe(0)
+  })
 })

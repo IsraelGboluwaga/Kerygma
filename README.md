@@ -38,11 +38,13 @@ Browser (Admin)
     │  POST /admin/ingest
     ▼
 Hono HTTP Server (:3000)
-    ├── GET  /admin          → Admin form (password-gated)
-    ├── POST /admin/ingest   → Enqueue job → 202 + jobId
-    ├── GET  /admin/jobs     → Recent job statuses
-    ├── GET  /admin/jobs/:id → Poll single job
-    └── GET  /health         → { ok: true }
+    ├── GET  /admin             → Admin form (password-gated)
+    ├── GET  /admin/status      → Live status dashboard
+    ├── POST /admin/ingest      → Enqueue job → 202 + jobId
+    ├── GET  /admin/jobs        → Recent job statuses
+    ├── GET  /admin/jobs/:id    → Poll single job
+    ├── GET  /admin/status/data → Live queue + phase snapshot
+    └── GET  /health            → { ok: true }
          │
     In-process job queue (sequential)
          │
@@ -85,8 +87,9 @@ kerygma/
 │   ├── mcp/
 │   │   └── server.ts              # 4 MCP tool registrations
 │   └── web/
-│       ├── router.ts              # Hono app — chat, admin, and health routes
+│       ├── router.ts              # Hono app — chat, admin, status, and health routes
 │       ├── adminHtml.ts           # Admin form HTML (password-gated, live job polling)
+│       ├── statusHtml.ts          # Live ingestion status dashboard (phase stepper + queue)
 │       └── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
 ├── tests/
 │   ├── setup.ts                   # Env vars for test context
@@ -197,6 +200,8 @@ Fill in the form:
 
 Click **Ingest Sermon**. The form polls every 3 seconds and shows the job status until it finishes (`done`) or fails (`failed`). Multiple sermons can be queued — they process one at a time.
 
+For deeper visibility, open the **Live status →** link (or visit `/admin/status`). It auto-refreshes every 2 seconds and shows the running job's current phase (Download → Transcribe → Chunk → Embed) plus each queued job's position in line — all from structured job state, so it adds no log noise.
+
 If a job fails after transcription, re-submitting the same URL will resume from the chunking step — the transcription is preserved in the database, so the download and Whisper step are not repeated.
 
 The `X-Admin-Secret` header is sent automatically using the password you type into the form.
@@ -286,7 +291,7 @@ chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
 yarn dev            # run with tsx watch (needs cmake + ffmpeg + whisper model on host)
 yarn build          # tsc → dist/
 yarn start          # node dist/main.js
-yarn test           # vitest run — 58 tests
+yarn test           # vitest run — 60 tests
 yarn test:watch     # vitest in watch mode
 yarn test:coverage  # vitest with v8 coverage report
 yarn typecheck      # tsc --noEmit
