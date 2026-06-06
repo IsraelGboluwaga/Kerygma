@@ -57,6 +57,10 @@ export function startScheduler(anthropic: Anthropic): void {
   const deadline = stored ? parseInt(stored, 10) : Date.now() + FOUR_DAYS_MS
   if (!stored) setConfig(FREQUENT_UNTIL_KEY, String(deadline))
 
+  // Always sync immediately on startup so a fresh deploy or restart doesn't
+  // wait up to 10 hours for the first batch of sermons to be enqueued.
+  void syncFromApi(anthropic)
+
   const remainingMs = deadline - Date.now()
 
   if (remainingMs <= 0) {
