@@ -32,7 +32,7 @@ export function adminHtml(): string {
     .subtitle { color: #555; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
     .top-bar a.live-link { margin-left: auto; color: #666; font-size: 0.8rem; text-decoration: none; }
     .top-bar a.live-link:hover { color: #df4e4e; }
-    .content { flex: 1; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; max-width: 1100px; width: 100%; }
+    .content { flex: 1; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem; width: 100%; }
     .card {
       background: #0d0d0d;
       border: 1px solid #1f1f1f;
