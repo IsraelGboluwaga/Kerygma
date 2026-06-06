@@ -50,6 +50,8 @@ export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
 
   // ── Static assets ──────────────────────────────────────────────────────
+  app.get('/favicon.ico', (c) => c.redirect('/assets/favicon.png', 301))
+
   app.get('/assets/:file', (c) => {
     const file = c.req.param('file')
     try {
