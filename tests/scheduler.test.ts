@@ -119,7 +119,7 @@ describe('startScheduler', () => {
     startScheduler(fakeAnthropicClient)
 
     expect(cron.schedule).toHaveBeenCalledWith(
-      '0 6 * * 1,4',
+      '0 */10 * * *', //'0 6 * * 1,4',
       expect.any(Function)
     )
   })
