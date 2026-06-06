@@ -26,7 +26,7 @@
 
 ### 4. Automated ingestion from the sermons API
 - New module `src/ingestion/sync.ts`:
-  - Fetch all pages from `https://sermons-api.essantra.joincci.org/sermons`
+  - Fetch all pages from `https://sermons-api.essantra.joincci.org/sermons` in batches of 50 ("?search=&page=1&perPage=50")
   - For each sermon, derive `video_id` and skip if already in DB
   - Enqueue new sermons into the existing job queue
 - Wire sync to run on server startup and on a recurring schedule (e.g. every hour)
