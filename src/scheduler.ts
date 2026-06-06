@@ -42,9 +42,20 @@ export async function syncFromApi(anthropic: Anthropic): Promise<void> {
 }
 
 export function startScheduler(anthropic: Anthropic): void {
-  // Monday (1) and Thursday (4) at 06:00
-  cron.schedule('0 6 * * 1,4', () => {
+  // Run every 10 hours for 4 days, then switch to Tue (2) + Fri (5) at 06:00
+  const frequentTask = cron.schedule('0 */10 * * *', () => {
     void syncFromApi(anthropic)
   })
-  logger.info('Scheduler started — syncing Mon + Thu at 06:00')
+  logger.info('Scheduler started — syncing every 10 hours for 4 days')
+
+  setTimeout(
+    () => {
+      frequentTask.stop()
+      cron.schedule('0 6 * * 2,5', () => {
+        void syncFromApi(anthropic)
+      })
+      logger.info('Scheduler updated — syncing Tue + Fri at 06:00')
+    },
+    4 * 24 * 60 * 60 * 1000,
+  )
 }

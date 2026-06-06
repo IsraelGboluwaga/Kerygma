@@ -151,7 +151,9 @@ Input:
 `series` is stored as `${series}-${year}` (e.g. `Faith Foundations-2024`). Speaker is required.
 
 ### `src/scheduler.ts`
-Registers a `node-cron` job (`'0 6 * * 1,4'`) to auto-sync new sermons Mon + Thu at 06:00.
+Registers a `node-cron` job that runs every 10 hours for the first 4 days after startup, then
+switches to Tue + Fri at 06:00 (`'0 6 * * 2,5'`) for ongoing syncs. The switch is handled via
+a `setTimeout` that stops the frequent task and starts the weekly one after 4 days.
 Calls `fetchAllSermons()` and enqueues any sermon whose `videoId` doesn't exist in the DB yet.
 Stops enqueueing if `getQueueDepth() >= 500` to avoid runaway growth.
 Also exports `syncFromApi(anthropic)` for use by the manual `POST /admin/sync-api` endpoint.
@@ -210,7 +212,7 @@ Sequential startup:
 2. `loadEmbedder()` — warm up the embedding model
 3. Raw `http.createServer()` — `/mcp` dispatches to a fresh `McpServer` per request;
    everything else passes through `getRequestListener(app.fetch)` (Hono)
-4. `startScheduler(anthropic)` — registers cron job for Mon + Thu sync
+4. `startScheduler(anthropic)` — registers cron job (every 10 h for 4 days, then Tue + Fri 06:00)
 5. `SIGTERM` / `SIGINT` handlers — wait for the active job to finish before exiting
 
 ---
