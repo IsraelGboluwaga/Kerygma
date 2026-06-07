@@ -115,9 +115,12 @@ Lazy-initialises a singleton `OpenAI` client (one per process).
 Returns `{ segments: TranscriptSegment[], duration: number, transcript: string }`.
 
 ### `src/ingestion/api-source.ts`
-Paginates through the sermon REST API at `${SERMON_BASE_URL}/sermons` (50 per page).
+Paginates through the sermon listing endpoint at `SERMON_BASE_URL` (50 per page) —
+`SERMON_BASE_URL` is the full listing URL (e.g. `https://host/sermons`) and the
+`page`/`perPage` query string is appended directly.
 Maps each API sermon `{ _id, title, preacher, sermon_date, audio_info, theme, tags, excerpt, description_string }`
-to an `IngestRequest`. Audio URLs that are relative paths are prefixed with `AUDIO_BASE_URL`.
+to an `IngestRequest`. Audio URLs that are relative paths are joined onto `AUDIO_BASE_URL`
+(slash-tolerant, so a trailing slash on the base does not produce a doubled `//`).
 The API `theme` (`{ _id, name, slug }`) is carried through only when it has both an `_id` and a `name`.
 Exported as an async generator: `fetchAllSermons(): AsyncGenerator<IngestRequest>`.
 

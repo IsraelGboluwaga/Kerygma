@@ -140,7 +140,7 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    ANTHROPIC_API_KEY=sk-ant-...
    OPENAI_API_KEY=sk-...
    ADMIN_SECRET=your-secret-password
-   SERMON_BASE_URL=https://sermons-api.example.com
+   SERMON_BASE_URL=https://sermons-api.example.com/sermons
    ```
 
 3. **Build the image**
@@ -252,8 +252,8 @@ What has Apostle Emmanuel Iren said about healing?
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `OPENAI_API_KEY` | Yes | — | OpenAI API key (used for Whisper transcription) |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
-| `SERMON_BASE_URL` | Yes | — | Base URL for the sermon REST API (used to fetch sermon listings) |
-| `AUDIO_BASE_URL` | Yes | — | Base URL prepended to relative audio paths returned by the sermon API |
+| `SERMON_BASE_URL` | Yes | — | Full sermon listing endpoint, e.g. `https://sermons-api.example.com/sermons` (the `page`/`perPage` query string is appended directly) |
+| `AUDIO_BASE_URL` | Yes | — | Base URL prepended to relative audio paths returned by the sermon API (a trailing slash is normalised) |
 | `MINISTRY_NAME` | No | `the church` | Ministry name shown in the UI and AI prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |

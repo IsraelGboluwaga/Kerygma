@@ -61,7 +61,7 @@ describe('fetchAllSermons', () => {
     expect(req.description).toBe('A sermon on walking in faith.')
   })
 
-  it('builds downloadUrl by prepending SERMON_BASE_URL to relative audio path', async () => {
+  it('builds downloadUrl by prepending AUDIO_BASE_URL to a relative audio path (no doubled slash)', async () => {
     mockFetch.mockResolvedValue(mockOkResponse(makeApiResponse([baseSermon])))
 
     const results: object[] = []
@@ -70,6 +70,17 @@ describe('fetchAllSermons', () => {
     const req = results[0] as Record<string, string>
     expect(req.downloadUrl).toBe(
       'https://sermons-api.test.example.com/audio/walking-by-faith.mp3'
+    )
+  })
+
+  it('requests the listing endpoint without duplicating the /sermons path', async () => {
+    mockFetch.mockResolvedValue(mockOkResponse(makeApiResponse([baseSermon])))
+
+    for await (const _ of fetchAllSermons()) { /* drain */ }
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://sermons-api.test.example.com/sermons?search=&page=1&perPage=50',
+      expect.anything()
     )
   })
 

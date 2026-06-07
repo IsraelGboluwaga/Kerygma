@@ -52,8 +52,8 @@ Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `OPENAI_API_KEY` | Yes | — | OpenAI API key (used for Whisper transcription) |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
-| `SERMON_BASE_URL` | Yes | — | Base URL for the sermon REST API (e.g. `https://sermons-api.example.com`) |
-| `AUDIO_BASE_URL` | Yes | — | Base URL prepended to relative audio paths from the sermon API (e.g. `https://cdn.example.com`) |
+| `SERMON_BASE_URL` | Yes | — | Full sermon listing endpoint; the `page`/`perPage` query string is appended directly (e.g. `https://sermons-api.example.com/sermons`) |
+| `AUDIO_BASE_URL` | Yes | — | Base URL prepended to relative audio paths from the sermon API (e.g. `https://cdn.example.com`); a trailing slash is normalised |
 | `MINISTRY_NAME` | No | `the church` | Used in UI titles and AI system prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite path |
 | `PORT` | No | `3000` | HTTP server port |

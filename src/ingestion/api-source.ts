@@ -41,6 +41,13 @@ interface ApiPage {
   }
 }
 
+// Join a base URL and a path with exactly one slash between them, regardless of
+// whether the base has a trailing slash or the path a leading one. Prevents both
+// the doubled `//` (base + leading-slash path) and missing-slash footguns.
+function joinUrl(base: string, path: string): string {
+  return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+}
+
 function normalizeTags(tags: unknown): string[] | undefined {
   if (!Array.isArray(tags) || tags.length === 0) return undefined
   return (tags as Array<string | ApiTag>).map((t) => {
@@ -54,7 +61,7 @@ function mapToIngestRequest(sermon: ApiSermon): IngestRequest {
   const audioPath = sermon.audio_info?.audio_url ?? ''
   const downloadUrl = audioPath.startsWith('http')
     ? audioPath
-    : `${config.AUDIO_BASE_URL}${audioPath}`
+    : joinUrl(config.AUDIO_BASE_URL, audioPath)
 
   // Only build a theme when the upstream record carries both a stable id and a
   // name — theme_id is the key we rely on to survive future name changes.
@@ -78,13 +85,15 @@ function mapToIngestRequest(sermon: ApiSermon): IngestRequest {
 }
 
 export async function* fetchAllSermons(): AsyncGenerator<IngestRequest> {
-  const baseUrl = config.SERMON_BASE_URL
+  // SERMON_BASE_URL is the full listing endpoint (e.g. https://host/sermons);
+  // strip any trailing slash so the query string attaches cleanly.
+  const baseUrl = config.SERMON_BASE_URL.replace(/\/+$/, '')
   let page = 1
   const perPage = 50
   let total: number | null = null
 
   while (true) {
-    const url = `${baseUrl}/sermons?search=&page=${page}&perPage=${perPage}`
+    const url = `${baseUrl}?search=&page=${page}&perPage=${perPage}`
     logger.info(`Fetching sermon list page ${page}...`)
 
     const response = await fetch(url, { signal: AbortSignal.timeout(30_000) })
