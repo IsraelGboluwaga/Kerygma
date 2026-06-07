@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
@@ -118,13 +119,26 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
     version: '1.0.0',
   })
 
+  // The SDK's generic `server.tool(name, desc, shape, cb)` overload forces
+  // `tsc` to compute `ShapeOutput<Args>` over each Zod field, evaluating both
+  // the bundled v3 and v4 type machinery. With our four tools that ballooned
+  // to ~18M type instantiations and made `yarn typecheck` take ~3.5 minutes.
+  // Registering through a loosely-typed boundary skips that inference entirely
+  // while each handler keeps its own explicit arg/return types below.
+  type RegisterTool = <Args>(
+    name: string,
+    description: string,
+    schema: z.ZodRawShape,
+    handler: (args: Args) => CallToolResult | Promise<CallToolResult>
+  ) => void
+  const tool = server.tool.bind(server) as unknown as RegisterTool
+
   // ── Tool 1: list_sermons ───────────────────────────────────────────────
-  server.tool(
+  tool(
     'list_sermons',
     'List recently indexed sermons.',
     { limit: z.number().int().positive().default(20).describe('Max sermons to return') },
-    // @ts-expect-error — TS2589: handler return type inference too deep
-    async ({ limit }: { limit: number }) => {
+    async ({ limit }: { limit: number }): Promise<CallToolResult> => {
       const rows = listSermons(limit)
 
       if (rows.length === 0) {
@@ -150,7 +164,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   )
 
   // ── Tool 2: ask_church ─────────────────────────────────────────────────
-  server.tool(
+  tool(
     'ask_church',
     'Answer a specific question using teachings from indexed sermons. Supports filtering by date and/or speaker.',
     {
@@ -164,8 +178,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
         .optional()
         .describe('Optional speaker name or partial name to filter by'),
     },
-    // @ts-expect-error — TS2589: handler return type inference too deep
-    async ({ question, date_filter, speaker_filter }: { question: string; date_filter?: string; speaker_filter?: string }) => {
+    async ({ question, date_filter, speaker_filter }: { question: string; date_filter?: string; speaker_filter?: string }): Promise<CallToolResult> => {
       const sf = resolveSpeakerFilter(speaker_filter)
       if (!sf.ok) return sf.response
       const resolvedSpeaker = sf.name
@@ -221,7 +234,7 @@ If the excerpts don't contain enough information to answer, say so.`,
   )
 
   // ── Tool 3: summarise_sermon ───────────────────────────────────────────
-  server.tool(
+  tool(
     'summarise_sermon',
     'Get a summary of what was preached on a given date. IMPORTANT: Before calling this tool, ask the user whether they want a "brief" summary (key points only, faster) or a "comprehensive" summary (full breakdown with all themes, scripture references, and timestamps). Then pass their answer as summary_type.',
     {
@@ -236,8 +249,7 @@ If the excerpts don't contain enough information to answer, say so.`,
         .enum(['brief', 'comprehensive'])
         .describe('Type of summary: "brief" (3-5 key points) or "comprehensive" (full breakdown)'),
     },
-    // @ts-expect-error — TS2589: handler return type inference too deep
-    async ({ date, speaker, summary_type }: { date: string; speaker?: string; summary_type: 'brief' | 'comprehensive' }) => {
+    async ({ date, speaker, summary_type }: { date: string; speaker?: string; summary_type: 'brief' | 'comprehensive' }): Promise<CallToolResult> => {
       const sf = resolveSpeakerFilter(speaker)
       if (!sf.ok) return sf.response
       const resolvedSpeaker = sf.name
@@ -293,7 +305,7 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
   )
 
   // ── Tool 4: search_teachings ───────────────────────────────────────────
-  server.tool(
+  tool(
     'search_teachings',
     'Search for teachings on a specific topic across all sermons.',
     {
@@ -303,7 +315,7 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
         .optional()
         .describe('Optional speaker name to filter by'),
     },
-    async ({ topic, speaker_filter }: { topic: string; speaker_filter?: string }) => {
+    async ({ topic, speaker_filter }: { topic: string; speaker_filter?: string }): Promise<CallToolResult> => {
       const sf = resolveSpeakerFilter(speaker_filter)
       if (!sf.ok) return sf.response
       const resolvedSpeaker = sf.name
