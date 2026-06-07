@@ -20,7 +20,7 @@ function makeApiResponse(
   perPage = 50
 ) {
   return {
-    success: true,
+    message: 'Success',
     data: { total, page, perPage, data: sermons },
   }
 }
@@ -106,8 +106,8 @@ describe('fetchAllSermons', () => {
     const page2Sermons = [{ ...baseSermon, _id: 'id-p2-0', title: 'Sermon P2-0' }]
 
     mockFetch
-      .mockResolvedValueOnce(mockOkResponse({ success: true, data: { total: 51, page: 1, perPage: 50, data: page1Sermons } }))
-      .mockResolvedValueOnce(mockOkResponse({ success: true, data: { total: 51, page: 2, perPage: 50, data: page2Sermons } }))
+      .mockResolvedValueOnce(mockOkResponse({ message: 'Success', data: { total: 51, page: 1, perPage: 50, data: page1Sermons } }))
+      .mockResolvedValueOnce(mockOkResponse({ message: 'Success', data: { total: 51, page: 2, perPage: 50, data: page2Sermons } }))
 
     const results: object[] = []
     for await (const req of fetchAllSermons()) results.push(req)
@@ -136,7 +136,7 @@ describe('fetchAllSermons', () => {
   })
 
   it('throws when the API response has unexpected shape', async () => {
-    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: false }) })
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ message: 'Error' }) })
 
     await expect(async () => {
       for await (const _ of fetchAllSermons()) { /* drain */ }
