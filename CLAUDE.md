@@ -109,6 +109,7 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - MCP tools must remain **read-only** — no writes from `src/mcp/server.ts`.
 - All Claude calls inside MCP tools must use `withRetry()`.
 - Speaker disambiguation and nearest-date fallback are required for any tool that accepts a speaker or date argument — reuse `resolveSpeaker` and `nearestDateMessage`.
+- Register tools through the loosely-typed `tool` boundary (`server.tool.bind(server) as unknown as RegisterTool`) in `createMcpServer`, not `server.tool` directly. The SDK's generic overload forces `tsc` to instantiate `ShapeOutput<Args>` over both bundled Zod v3/v4 type machineries, which exploded `yarn typecheck` to ~18M instantiations (~3.5 min). The boundary skips that inference; each handler keeps its own explicit `{ ... }` arg type and `Promise<CallToolResult>` return type. Do **not** reintroduce `@ts-expect-error` suppressions — they hide the error but `tsc` still does all the work.
 
 ### Testing
 - Tests live in `tests/`. Use Vitest.
