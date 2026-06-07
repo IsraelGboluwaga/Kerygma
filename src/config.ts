@@ -12,6 +12,7 @@ const envSchema = z.object({
   CLAUDE_MODEL: z.string().default('claude-sonnet-4-20250514'),
   CHUNKING_MODEL: z.string().default('claude-haiku-4-5-20251001'),
   SERMON_BASE_URL: z.string().url('SERMON_BASE_URL must be a valid URL'),
+  AUDIO_BASE_URL: z.string().url('AUDIO_BASE_URL must be a valid URL'),
 })
 
 const parsed = envSchema.safeParse(process.env)

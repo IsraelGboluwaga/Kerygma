@@ -14,11 +14,11 @@ Browser (Member)
     ▼
 Browser (Admin)
     │  GET  /admin             → Admin UI (HTML, password-gated)
-    │  GET  /admin/status      → Live status dashboard (HTML)
-    │  POST /admin/ingest      → Enqueue job → 202 + jobId  (JSON body)
-    │  GET  /admin/jobs        → List recent job statuses
-    │  GET  /admin/jobs/:id    → Poll a single job
-    │  GET  /admin/status/data → Live queue + phase snapshot (JSON)
+    │  GET  /admin/live        → Live status dashboard (HTML)
+    │  GET  /admin/status      → Stats snapshot (JSON: queueDepth, lastSyncAt, sermonCount)
+    │  POST /admin/sync-api    → Trigger background API sync → 202 (protected)
+    │  GET  /admin/jobs        → List recent job statuses (protected)
+    │  GET  /admin/status/data → Live queue + phase snapshot (JSON, protected)
     ▼
 Hono HTTP Server (:3000)
     └── GET /health        → { ok: true }
@@ -51,7 +51,7 @@ McpServer (4 read-only tools)
 Validates `process.env` with Zod on startup. If a required variable is missing, the
 process crashes with a clear error before doing anything else. Exports a frozen singleton.
 
-Key required variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ADMIN_SECRET`, `SERMON_BASE_URL`. Optional: `MINISTRY_NAME`, `CHUNKING_MODEL`, `CLAUDE_MODEL`, `MAX_AUDIO_DURATION_SECONDS`, `DB_PATH`, `PORT`.
+Key required variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ADMIN_SECRET`, `SERMON_BASE_URL`, `AUDIO_BASE_URL`. Optional: `MINISTRY_NAME`, `CHUNKING_MODEL`, `CLAUDE_MODEL`, `MAX_AUDIO_DURATION_SECONDS`, `DB_PATH`, `PORT`.
 
 ### `src/logger.ts`
 Winston-based logger exported as a singleton `logger`. Uses colourised output in
@@ -98,6 +98,9 @@ Typed functions for every DB operation:
 - `getChunksBySermonId(id)` → `ChunkRow[]`
 - `searchChunks(query, limit)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance
 - `listSermons(limit)` → `SermonRow[]`
+- `upsertTheme(theme)` → `number` — inserts/updates a theme keyed on its upstream id, returns the local `themes.id`
+- `getSermonsByTheme(themeId)` → `SermonRow[]` — all sermons for an upstream theme id, newest first
+- `listThemes()` → `ThemeRow[]`
 - `upsertJob` / `getJobRow` / `listRecentJobRows` / `failStaleJobs` — job persistence
 
 ### `src/ingestion/downloader.ts`
@@ -113,8 +116,9 @@ Returns `{ segments: TranscriptSegment[], duration: number, transcript: string }
 
 ### `src/ingestion/api-source.ts`
 Paginates through the sermon REST API at `${SERMON_BASE_URL}/sermons` (50 per page).
-Maps each API sermon `{ _id, title, preacher, sermon_date, audio_info, theme, tags, description_string }`
-to an `IngestRequest`. Audio URLs that are relative paths are prefixed with `SERMON_BASE_URL`.
+Maps each API sermon `{ _id, title, preacher, sermon_date, audio_info, theme, tags, excerpt, description_string }`
+to an `IngestRequest`. Audio URLs that are relative paths are prefixed with `AUDIO_BASE_URL`.
+The API `theme` (`{ _id, name, slug }`) is carried through only when it has both an `_id` and a `name`.
 Exported as an async generator: `fetchAllSermons(): AsyncGenerator<IngestRequest>`.
 
 ### `src/ingestion/chunker.ts`
@@ -148,14 +152,16 @@ Returns `{ status: 'ok' | 'duplicate' | 'too_long' | 'error', message, sermonId?
 
 Input:
 ```ts
-{ videoId?, downloadUrl, webpageUrl?, title, speaker, date, series?, tags?, description? }
+{ videoId?, downloadUrl, webpageUrl?, title, speaker, date, excerpt?, theme?, tags?, description? }
 ```
-`series` is stored as `${series}-${year}` (e.g. `Faith Foundations-2024`). Speaker is required.
+`theme` is `{ themeId, name, slug? }`; on insert it is upserted into the `themes` table (keyed on the
+upstream `themeId`) and the sermon stores the resulting `themes.id` as `theme_id`. Speaker is required.
 
 ### `src/scheduler.ts`
-Registers a `node-cron` job that runs every 10 hours for the first 4 days after startup, then
-switches to Tue + Fri at 06:00 (`'0 6 * * 2,5'`) for ongoing syncs. The switch is handled via
-a `setTimeout` that stops the frequent task and starts the weekly one after 4 days.
+On startup, calls `syncFromApi()` immediately so a fresh deploy doesn't wait up to 10 hours for
+the first batch. Then registers a `node-cron` job: every 10 hours for the first 4 days, then
+Tue + Fri at 06:00 (`'0 6 * * 2,5'`) for ongoing syncs. The phase switch is handled via a
+`setTimeout` that stops the frequent task and starts the weekly one.
 Calls `fetchAllSermons()` and enqueues any sermon whose `videoId` doesn't exist in the DB yet.
 Stops enqueueing if `getQueueDepth() >= 500` to avoid runaway growth.
 Also exports `syncFromApi(anthropic)` for use by the manual `POST /admin/sync-api` endpoint.
@@ -182,6 +188,13 @@ Registers 4 tools:
 
 Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`.
 
+### `src/web/dbHtml.ts`
+Returns the HTML string for the DB browser (`GET /lyrical-theology`). Contains:
+- A password field (uses `X-Admin-Secret` for data requests)
+- A table selector for `sermons`, `chunks`, and `jobs`
+- A paginated data grid with BLOB columns rendered as `[blob: NB]`
+- Client-side fetch against `GET /lyrical-theology/:table?limit=&offset=`
+
 ### `src/web/chatHtml.ts`
 Returns the HTML string for the member-facing chat UI. Contains:
 - A message thread view (user bubbles right, assistant bubbles left)
@@ -190,16 +203,15 @@ Returns the HTML string for the member-facing chat UI. Contains:
 - New Conversation button
 
 ### `src/web/adminHtml.ts`
-Returns the HTML string for the admin page. Contains:
-- A password field — the form is locked until the correct `ADMIN_SECRET` is accepted (verified by attempting `GET /admin/jobs`; 401 keeps the form disabled)
-- An ingestion form: MP3 URL, webpage URL, title, series, speaker, date, tags
-- Client-side JS that `fetch`-POSTs JSON with `X-Admin-Secret` header, resets the form immediately after queuing so the next sermon can be entered without waiting
-- Polls `/admin/jobs/:id` every 3s until terminal state; skips redundant DOM updates when status hasn't changed
-- A live job history table with Retry buttons for failed jobs that have not since succeeded
-- A "Live status →" link to the status dashboard
+Returns the HTML string for the admin dashboard page. Contains:
+- A password field — stats and job list are loaded only after the correct `ADMIN_SECRET` is accepted (verified via `GET /admin/status`; 401 keeps the data hidden)
+- A stats row: sermons indexed, queue depth, last sync timestamp
+- A "Sync Now" button that POSTs to `POST /admin/sync-api` and refreshes the job list after 3 s
+- A recent jobs table (title, status badge, message); auto-refreshes every 30 s
+- A "Live status →" link to `/admin/live`
 
 ### `src/web/statusHtml.ts`
-Returns the HTML string for the read-only status dashboard (`GET /admin/status`). Contains:
+Returns the HTML string for the live status dashboard (`GET /admin/live`). Contains:
 - A password field (remembered in `sessionStorage`) so it can be shared with the admin page
 - A "Now Processing" phase stepper (Download → Transcribe → Chunk → Embed) for the currently running job, driven by the job's `phase` field
 - A queue list showing each waiting job's 1-based position, plus a recent-jobs table
@@ -212,13 +224,17 @@ Hono app wiring all routes:
 - `GET /` — serves the chat UI
 - `POST /` — accepts `{ messages }`, searches chunks using the last user message (FTS5, stopword-filtered, OR semantics), builds a system prompt with matching excerpts (title | speaker | date | timestamp | URL), streams a Claude SSE response
 
-**Admin (`/admin/*`)** — write/data routes protected by `X-Admin-Secret` middleware; the two HTML pages (`/admin`, `/admin/status`) are public and prompt for the secret client-side
-- `GET /admin` — serves the admin UI
+**Admin (`/admin/*`)** — data/action routes protected by `X-Admin-Secret` middleware; the two HTML pages (`/admin`, `/admin/live`) are public and prompt for the secret client-side
+- `GET /admin` — serves the admin dashboard UI
 - `GET /admin/live` — serves the live phase/queue status dashboard (HTML)
-- `POST /admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202)
-- `GET /admin/jobs` — returns recent job list (up to 50)
-- `GET /admin/jobs/:id` — returns single job status
-- `GET /admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position`
+- `GET /admin/status` — returns `{ queueDepth, lastSyncAt, sermonCount }` (protected)
+- `POST /admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202, protected)
+- `GET /admin/jobs` — returns recent job list (up to 50, protected)
+- `GET /admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position` (protected)
+
+**DB Browser (`/lyrical-theology/*`)** — password-gated read-only table explorer
+- `GET /lyrical-theology` — serves the DB browser UI (HTML)
+- `GET /lyrical-theology/:table` — returns paginated rows for `sermons`, `chunks`, or `jobs` (protected); accepts `limit` and `offset` query params
 
 ### `src/main.ts`
 Sequential startup:
@@ -251,10 +267,9 @@ Member types question → POST / { messages: [...] }
 ## Data Flow: Ingestion
 
 ```
-Admin submits form (or scheduler triggers sync, or POST /admin/sync-api called)
-    → POST /admin/ingest  (JSON body)
-    → queue.enqueue(job)        returns jobId immediately (202)
-    → browser polls /admin/jobs/:jobId
+Scheduler triggers sync on startup (and on cron), or admin clicks "Sync Now" (POST /admin/sync-api)
+    → syncFromApi() calls fetchAllSermons() and enqueues new sermons
+    → queue.enqueue(job)        returns jobId immediately
 
 Meanwhile, in background:
     pipeline.ingestSermon(req)
@@ -299,6 +314,15 @@ e.g. ask_church("What was taught about faith?")
 ## Database Schema
 
 ```sql
+-- One row per theme; keyed on the upstream API theme id so links survive renames
+CREATE TABLE themes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id   TEXT UNIQUE NOT NULL,  -- upstream API theme _id
+    name       TEXT NOT NULL,
+    slug       TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- One row per MP3
 CREATE TABLE sermons (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,7 +332,8 @@ CREATE TABLE sermons (
     download_url     TEXT NOT NULL,         -- original MP3 URL
     webpage_url      TEXT,                  -- optional source page
     speaker          TEXT NOT NULL,         -- required
-    series           TEXT,                  -- e.g. "Faith Foundations-2024"
+    excerpt          TEXT,                  -- short summary from the listing API
+    theme_id         INTEGER REFERENCES themes(id),  -- FK to themes
     description      TEXT,                  -- from API description_string
     duration         INTEGER,               -- seconds
     tags             TEXT,                  -- JSON array

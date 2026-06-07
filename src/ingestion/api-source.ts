@@ -10,6 +10,7 @@ interface ApiTag {
 interface ApiTheme {
   _id?: string
   name?: string
+  slug?: string
 }
 
 interface ApiAudioInfo {
@@ -25,6 +26,7 @@ interface ApiSermon {
   theme?: ApiTheme | null
   tags?: string[] | ApiTag[]
   description_string?: string
+  excerpt?: string
   youtube_link?: string | null
   slug?: string
 }
@@ -52,7 +54,14 @@ function mapToIngestRequest(sermon: ApiSermon): IngestRequest {
   const audioPath = sermon.audio_info?.audio_url ?? ''
   const downloadUrl = audioPath.startsWith('http')
     ? audioPath
-    : `${config.SERMON_BASE_URL}${audioPath}`
+    : `${config.AUDIO_BASE_URL}${audioPath}`
+
+  // Only build a theme when the upstream record carries both a stable id and a
+  // name — theme_id is the key we rely on to survive future name changes.
+  const theme =
+    sermon.theme?._id && sermon.theme?.name
+      ? { themeId: sermon.theme._id, name: sermon.theme.name, slug: sermon.theme.slug }
+      : undefined
 
   return {
     videoId: sermon._id,
@@ -61,7 +70,8 @@ function mapToIngestRequest(sermon: ApiSermon): IngestRequest {
     title: sermon.title,
     speaker: sermon.preacher,
     date: sermon.sermon_date.slice(0, 10),  // YYYY-MM-DD
-    series: sermon.theme?.name,
+    excerpt: sermon.excerpt || undefined,
+    theme,
     tags: normalizeTags(sermon.tags),
     description: sermon.description_string || undefined,
   }
