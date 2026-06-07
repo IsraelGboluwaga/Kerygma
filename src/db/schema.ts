@@ -64,7 +64,6 @@ export function initDb(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_sermon_date         ON sermons(date);
     CREATE INDEX IF NOT EXISTS idx_sermon_video_id     ON sermons(video_id);
-    CREATE INDEX IF NOT EXISTS idx_sermon_theme        ON sermons(theme_id);
     CREATE INDEX IF NOT EXISTS idx_chunk_sermon_id     ON chunks(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_transcription_sermon ON transcriptions(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_job_created       ON jobs(created_at DESC);
@@ -124,6 +123,9 @@ export function initDb(db: Database.Database): void {
     // The legacy `series` TEXT column (if present) is left in place but unused.
     db.exec(`ALTER TABLE sermons ADD COLUMN theme_id INTEGER REFERENCES themes(id)`)
   }
+  // Index must come after migration shim — existing DBs won't have theme_id yet when
+  // the main db.exec() block runs, causing "no such column" on the CREATE INDEX.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sermon_theme ON sermons(theme_id)`)
   if (!sermonColNames.has('ingestion_status')) {
     // Existing rows are fully ingested, so default them to 'done'
     db.exec(`ALTER TABLE sermons ADD COLUMN ingestion_status TEXT NOT NULL DEFAULT 'done'`)
