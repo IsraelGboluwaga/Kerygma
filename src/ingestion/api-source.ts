@@ -32,7 +32,7 @@ interface ApiSermon {
 }
 
 interface ApiPage {
-  success: boolean
+  message: 'Success' | 'Error'
   data: {
     total: number
     page: number
@@ -102,7 +102,7 @@ export async function* fetchAllSermons(): AsyncGenerator<IngestRequest> {
     }
 
     const json = (await response.json()) as ApiPage
-    if (!json.success || !json.data?.data) {
+    if (json.message?.toLowerCase() !== 'success' || !json.data?.data) {
       throw new Error(`Unexpected API response format on page ${page}`)
     }
 
