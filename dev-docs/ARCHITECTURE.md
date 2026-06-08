@@ -220,12 +220,37 @@ Returns the HTML string for the live status dashboard (`GET /admin/live`). Conta
 - A queue list showing each waiting job's 1-based position, plus a recent-jobs table
 - Client-side JS that polls `GET /admin/status/data` every 2s — progress lives in structured job state, not in the logs
 
+### `src/web/transcriptsHtml.ts`
+Returns the HTML string for the transcripts page (`GET /transcripts`). Contains:
+- A natural-language search box (e.g. "sermons in February 2023", "all sermons on faith")
+- A collapsible structured-filter panel: month + year + theme (dropdown populated server-side from `listThemes()`) + speaker
+- A mobile-responsive results table (real `<table>` on wide screens, stacked cards under 640px) with title (linked to the transcript view), formatted date, theme tag, excerpt, and a Download PDF link
+- Client-side JS that calls `GET /transcripts/search` and renders the rows
+
+### `src/web/transcriptViewHtml.ts`
+Returns the HTML string for a single viewable transcript (`GET /transcripts/:videoId`). Renders the sermon title + meta, a "Download PDF" button, and the transcript body — timestamped per segment when `transcriptions.segments` is present, otherwise plain paragraphs from the verbatim text.
+
+### `src/web/transcriptPdf.ts`
+`generateTranscriptPdf(sermon, transcript)` renders a transcript to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser; sub-second even for a 2-hour sermon). `transcriptPdfFilename(sermon)` builds the `theme__title__month-year.pdf` download name (theme falls back to `sermon`).
+
+### `src/web/transcriptQuery.ts`
+`parseTranscriptQuery(text, anthropic)` uses the cheap `CHUNKING_MODEL` (wrapped in `withRetry`) to extract structured `{ date?, topic?, speaker? }` filters from a free-text request. `topic` is the subject the sermon should be *about* (e.g. "faith"), resolved by relevance — not a formal theme name. Returns `{}` on any parse failure so the route can fall back to a raw keyword search.
+
+### `src/web/transcriptFormat.ts`
+Pure formatting helpers shared by the transcripts table, view, and PDF: `formatSermonDate` ("4 July 2021"), `humanizeDatePrefix` ("February 2023"), `monthYearSlug` ("july-2021"), and `slugify`.
+
 ### `src/web/router.ts`
 Hono app wiring all routes:
 
 **Chat (`/`)**
 - `GET /` — serves the chat UI
 - `POST /` — accepts `{ messages }`, searches chunks using the last user message (FTS5, stopword-filtered, OR semantics), builds a system prompt with matching excerpts (title | speaker | date | timestamp | URL), streams a Claude SSE response
+
+**Transcripts (`/transcripts/*`)** — public, read-only transcript delivery
+- `GET /transcripts` — serves the transcripts search/table UI (HTML)
+- `GET /transcripts/search` — accepts `q` (natural-language, parsed via `parseTranscriptQuery`) **or** structured `month`/`year`/`theme`/`topic`/`speaker` params; returns `{ interpreted, sermons[] }`. Filters combine (base set by priority topic > theme > date > speaker, then the rest applied as predicates). `topic` is a **relevance** search over each sermon's Claude-derived section topics/summaries (`searchSermonsByTopic`), ranked by density — so "faith" returns sermons *geared towards* faith, not every sermon that says the word. Registered before `/transcripts/:videoId` so "search" isn't read as a video id
+- `GET /transcripts/:videoId` — serves the viewable transcript (HTML, rendered from `transcriptions.segments`)
+- `GET /transcripts/:videoId/download` — streams an on-demand PDF (`application/pdf`, `Content-Disposition: attachment`)
 
 **Admin (`/admin/*`)** — data/action routes protected by `X-Admin-Secret` middleware; the two HTML pages (`/admin`, `/admin/live`) are public and prompt for the secret client-side
 - `GET /admin` — serves the admin dashboard UI
@@ -265,6 +290,30 @@ Member types question → POST / { messages: [...] }
         { type: 'delta', text }           streamed token by token
         { type: 'done' }
     → Claude answers based solely on provided excerpts
+```
+
+## Data Flow: Transcripts
+
+```
+Member opens browser → GET /transcripts
+    → transcriptsHtml served (theme dropdown filled from listThemes())
+
+Member searches → GET /transcripts/search?q=... (or ?month=&year=&theme=&topic=&speaker=)
+    → q present:  parseTranscriptQuery() → { date?, topic?, speaker? }
+                  (nothing parsed → searchSermons() keyword fallback)
+      structured: month+year → date prefix; theme/topic/speaker applied directly
+    → resolveTranscriptSermons(): base by priority topic > theme > date > speaker,
+      then remaining filters applied. topic = relevance search over section
+      topics/summaries (searchSermonsByTopic), ranked by density
+    → JSON { interpreted, sermons: [{ title, dateFormatted, theme, excerpt,
+             hasTranscript, viewUrl, downloadUrl }] }
+
+Member clicks a title → GET /transcripts/:videoId
+    → getTranscriptionBySermonId() → transcriptViewHtml (timestamped segments)
+
+Member clicks Download → GET /transcripts/:videoId/download
+    → generateTranscriptPdf(sermon, transcript)  pdfkit, on demand
+    → application/pdf, attachment; filename=theme__title__month-year.pdf
 ```
 
 ## Data Flow: Ingestion

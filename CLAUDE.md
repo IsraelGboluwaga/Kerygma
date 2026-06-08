@@ -111,6 +111,13 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - Speaker disambiguation and nearest-date fallback are required for any tool that accepts a speaker or date argument — reuse `resolveSpeaker` and `nearestDateMessage`.
 - Register tools through the loosely-typed `tool` boundary (`server.tool.bind(server) as unknown as RegisterTool`) in `createMcpServer`, not `server.tool` directly. The SDK's generic overload forces `tsc` to instantiate `ShapeOutput<Args>` over both bundled Zod v3/v4 type machineries, which exploded `yarn typecheck` to ~18M instantiations (~3.5 min). The boundary skips that inference; each handler keeps its own explicit `{ ... }` arg type and `Promise<CallToolResult>` return type. Do **not** reintroduce `@ts-expect-error` suppressions — they hide the error but `tsc` still does all the work.
 
+### Transcripts page
+- Transcript text comes from the `transcriptions` table (`getTranscriptionBySermonId`) — the verbatim copy. Do not rebuild it from chunks.
+- PDFs are generated on demand with `pdfkit` (pure JS) in `src/web/transcriptPdf.ts`. Do **not** swap in a headless-browser renderer (Puppeteer/Playwright) — it would add a browser process and hundreds of MB of RAM to this single-process app.
+- `/transcripts/search` must be registered before `/transcripts/:videoId` so the static path isn't captured as a video id.
+- The natural-language query parser (`parseTranscriptQuery`) uses `CHUNKING_MODEL` via `withRetry` and must degrade to `{}` (then a keyword fallback) rather than erroring.
+- A subject like "on faith" is a **topic** (relevance), not a formal **theme**. `searchSermonsByTopic` matches the term only in the Claude-derived `topics`/`summary` FTS columns and ranks by density (share of sections about it) — do not resolve a topic with a bare content keyword match, which for common words like "faith" matches nearly every sermon.
+
 ### Testing
 - Tests live in `tests/`. Use Vitest.
 - Mock external I/O (Anthropic, Whisper, filesystem) — do not make real API calls in tests.

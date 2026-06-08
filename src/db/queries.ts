@@ -24,6 +24,22 @@ function sanitizeFtsQuery(query: string): string {
   return tokens.length > 0 ? tokens.join(' OR ') : '""'
 }
 
+// Build an FTS query that matches a subject only in the Claude-derived `topics`
+// and `summary` columns (not raw `content`). A term appearing there means the
+// section is *about* that subject — not just mentioning the word in passing,
+// which for a common word like "faith" would otherwise match almost everything.
+// Multiple tokens are ANDed for precision (e.g. "spiritual growth").
+function topicMatchQuery(term: string): string | null {
+  const tokens = term
+    .replace(/['"*()\^~\-]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((t) => !STOPWORDS.has(t.toLowerCase()))
+    .map((t) => `"${t}"`)
+  if (tokens.length === 0) return null
+  return `{topics summary} : (${tokens.join(' AND ')})`
+}
+
 export interface SermonRow {
   id: number
   video_id: string
@@ -244,6 +260,68 @@ export function getSermonsByTheme(themeId: string): SermonRow[] {
       `${SERMON_SELECT} WHERE t.theme_id = ? AND s.ingestion_status = 'done' ORDER BY s.date DESC`
     )
     .all(themeId) as SermonRow[]
+}
+
+// Resolve a free-text theme term (e.g. "faith") to its sermons via a substring
+// match on the theme name — so "faith" still matches a "Faith Foundations" theme.
+export function getSermonsByThemeName(name: string): SermonRow[] {
+  return getDb()
+    .prepare(
+      `${SERMON_SELECT} WHERE t.name IS NOT NULL AND LOWER(t.name) LIKE LOWER(?)
+       AND s.ingestion_status = 'done' ORDER BY s.date DESC`
+    )
+    .all(`%${name}%`) as SermonRow[]
+}
+
+// Distinct sermons whose chunks match an FTS query, ranked by best chunk relevance.
+// Used as the keyword fallback when a theme term isn't a formal theme name.
+export function searchSermons(query: string, limit = 50): SermonRow[] {
+  return getDb()
+    .prepare(
+      `SELECT s.*, t.name AS theme
+       FROM sermons s
+       LEFT JOIN themes t ON t.id = s.theme_id
+       JOIN (
+         SELECT c.sermon_id AS sid, MIN(fts.rank) AS best_rank
+         FROM chunks_fts fts
+         JOIN chunks c ON c.id = fts.rowid
+         WHERE chunks_fts MATCH ?
+         GROUP BY c.sermon_id
+       ) m ON m.sid = s.id
+       WHERE s.ingestion_status = 'done'
+       ORDER BY m.best_rank
+       LIMIT ?`
+    )
+    .all(sanitizeFtsQuery(query), limit) as SermonRow[]
+}
+
+// Sermons that are genuinely *about* a subject, ranked by relevance density —
+// the share of the sermon's sections whose Claude-derived topics/summary match.
+// A sermon predominantly about faith outranks one that mentions it once; a
+// sermon that only references the word in passing (content only) is excluded.
+export function searchSermonsByTopic(term: string, limit = 50): SermonRow[] {
+  const match = topicMatchQuery(term)
+  if (!match) return []
+  return getDb()
+    .prepare(
+      `SELECT s.*, th.name AS theme
+       FROM sermons s
+       LEFT JOIN themes th ON th.id = s.theme_id
+       JOIN (
+         SELECT c.sermon_id AS sid,
+                COUNT(*) AS topic_hits,
+                COUNT(*) * 1.0 /
+                  (SELECT COUNT(*) FROM chunks cc WHERE cc.sermon_id = c.sermon_id) AS density
+         FROM chunks_fts fts
+         JOIN chunks c ON c.id = fts.rowid
+         WHERE chunks_fts MATCH ?
+         GROUP BY c.sermon_id
+       ) m ON m.sid = s.id
+       WHERE s.ingestion_status = 'done'
+       ORDER BY m.density DESC, m.topic_hits DESC, s.date DESC
+       LIMIT ?`
+    )
+    .all(match, limit) as SermonRow[]
 }
 
 export function listThemes(): ThemeRow[] {

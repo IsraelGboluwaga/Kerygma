@@ -7,7 +7,21 @@ import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
 import { syncFromApi } from '../scheduler.js'
-import { searchChunks, getConfig, countSermons } from '../db/queries.js'
+import {
+  searchChunks,
+  getConfig,
+  countSermons,
+  listThemes,
+  listSermons,
+  getSermonByVideoId,
+  getSermonsByDate,
+  getSermonsByThemeName,
+  searchSermons,
+  searchSermonsByTopic,
+  getTranscriptionBySermonId,
+  type SermonRow,
+} from '../db/queries.js'
+import type { TranscriptSegment } from '../ingestion/transcriber.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
@@ -15,6 +29,11 @@ import { adminHtml } from './adminHtml.js'
 import { statusHtml } from './statusHtml.js'
 import { dbHtml } from './dbHtml.js'
 import { chatHtml } from './chatHtml.js'
+import { transcriptsHtml } from './transcriptsHtml.js'
+import { transcriptViewHtml } from './transcriptViewHtml.js'
+import { generateTranscriptPdf, transcriptPdfFilename } from './transcriptPdf.js'
+import { parseTranscriptQuery, type TranscriptQuery } from './transcriptQuery.js'
+import { formatSermonDate, humanizeDatePrefix } from './transcriptFormat.js'
 import { getDb } from '../db/connection.js'
 
 const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
@@ -43,6 +62,72 @@ function checkRateLimit(ip: string): boolean {
   if (entry.count >= RATE_LIMIT) return false
   entry.count++
   return true
+}
+
+const MAX_TRANSCRIPT_RESULTS = 100
+
+// Resolve the filters to a sermon list. A base set is chosen by priority —
+// topic (relevance) > theme (formal) > date > speaker — then the remaining
+// filters are applied as predicates. `topic` is a relevance search over the
+// sermon's section topics/summaries (what it is *about*), not a bare keyword
+// match, so a common word like "faith" returns sermons geared towards faith
+// rather than every sermon that happens to say it.
+function resolveTranscriptSermons(f: TranscriptQuery): SermonRow[] {
+  let rows: SermonRow[]
+  let themeApplied = false
+
+  if (f.topic) {
+    rows = searchSermonsByTopic(f.topic, MAX_TRANSCRIPT_RESULTS)
+    // If the chunker never tagged the topic, it may still be a formal theme.
+    if (rows.length === 0) rows = getSermonsByThemeName(f.topic)
+  } else if (f.theme) {
+    rows = getSermonsByThemeName(f.theme)
+    themeApplied = true
+  } else if (f.date) {
+    rows = getSermonsByDate(f.date)
+  } else if (f.speaker) {
+    rows = listSermons(500)
+  } else {
+    return []
+  }
+
+  if (f.date) rows = rows.filter((r) => r.date.startsWith(f.date as string))
+  if (f.theme && !themeApplied) {
+    const theme = f.theme.toLowerCase()
+    rows = rows.filter((r) => (r.theme ?? '').toLowerCase().includes(theme))
+  }
+  if (f.speaker) {
+    const sp = f.speaker.toLowerCase()
+    rows = rows.filter((r) => (r.speaker ?? '').toLowerCase().includes(sp))
+  }
+  return rows.slice(0, MAX_TRANSCRIPT_RESULTS)
+}
+
+// Shape a sermon row for the transcripts table JSON response.
+function toTranscriptRow(s: SermonRow): Record<string, unknown> {
+  return {
+    videoId: s.video_id,
+    title: s.title,
+    date: s.date,
+    dateFormatted: formatSermonDate(s.date),
+    theme: s.theme,
+    excerpt: s.excerpt,
+    speaker: s.speaker,
+    hasTranscript: getTranscriptionBySermonId(s.id) !== null,
+    viewUrl: `/transcripts/${s.video_id}`,
+    downloadUrl: `/transcripts/${s.video_id}/download`,
+  }
+}
+
+// Human-readable summary of what was searched, shown above the results.
+function describeInterpretation(f: TranscriptQuery, count: number): string {
+  const parts: string[] = []
+  if (f.topic) parts.push(`about “${f.topic}”`)
+  if (f.theme) parts.push(`in “${f.theme}”`)
+  if (f.speaker) parts.push(`by ${f.speaker}`)
+  if (f.date) parts.push(`from ${humanizeDatePrefix(f.date)}`)
+  const noun = count === 1 ? 'transcript' : 'transcripts'
+  return parts.length > 0 ? `${count} ${noun} ${parts.join(' ')}` : `${count} ${noun}`
 }
 
 export function createRouter(anthropic: Anthropic): Hono {
@@ -161,6 +246,84 @@ export function createRouter(anthropic: Anthropic): Hono {
         await s.write(`data: ${JSON.stringify({ type: 'error', message: 'An error occurred. Please try again.' })}\n\n`)
       }
     })
+  })
+
+  // ── Transcripts ─────────────────────────────────────────────────────────
+  // Page shell + theme list for the structured filter dropdown.
+  app.get('/transcripts', (c) => c.html(transcriptsHtml(listThemes())))
+
+  // Search endpoint — `q` (natural language) OR structured month/year/theme/speaker.
+  // Registered before /transcripts/:videoId so "search" isn't read as a video id.
+  app.get('/transcripts/search', async (c) => {
+    const q = c.req.query('q')?.trim()
+    let filters: TranscriptQuery
+    let sermons: SermonRow[]
+
+    if (q) {
+      filters = await parseTranscriptQuery(q, anthropic)
+      sermons = resolveTranscriptSermons(filters)
+      // The parser found nothing structured — treat the raw text as keywords.
+      if (sermons.length === 0 && !filters.date && !filters.topic && !filters.speaker) {
+        sermons = searchSermons(q, MAX_TRANSCRIPT_RESULTS)
+      }
+    } else {
+      const year = c.req.query('year')?.trim()
+      const month = c.req.query('month')?.trim()
+      const date = year && month ? `${year}-${month}` : year || undefined
+      filters = {
+        date,
+        theme: c.req.query('theme')?.trim() || undefined,
+        topic: c.req.query('topic')?.trim() || undefined,
+        speaker: c.req.query('speaker')?.trim() || undefined,
+      }
+      sermons = resolveTranscriptSermons(filters)
+    }
+
+    return c.json({
+      interpreted: describeInterpretation(filters, sermons.length),
+      sermons: sermons.map(toTranscriptRow),
+    })
+  })
+
+  // Viewable transcript (rendered from stored segments / verbatim text).
+  app.get('/transcripts/:videoId', (c) => {
+    const sermon = getSermonByVideoId(c.req.param('videoId'))
+    if (!sermon || sermon.ingestion_status !== 'done') return c.notFound()
+
+    const row = getTranscriptionBySermonId(sermon.id)
+    let segments: TranscriptSegment[] = []
+    if (row) {
+      try {
+        segments = JSON.parse(row.segments) as TranscriptSegment[]
+      } catch {
+        segments = []
+      }
+    }
+    return c.html(transcriptViewHtml(sermon, segments, row?.transcript ?? ''))
+  })
+
+  // On-demand PDF of the transcript — generated per request with pdfkit.
+  app.get('/transcripts/:videoId/download', async (c) => {
+    const sermon = getSermonByVideoId(c.req.param('videoId'))
+    if (!sermon || sermon.ingestion_status !== 'done') return c.notFound()
+
+    const row = getTranscriptionBySermonId(sermon.id)
+    if (!row) {
+      return c.json({ error: 'No transcript available for this sermon' }, 404)
+    }
+
+    try {
+      const pdf = await generateTranscriptPdf(sermon, row.transcript)
+      return new Response(new Uint8Array(pdf), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${transcriptPdfFilename(sermon)}"`,
+        },
+      })
+    } catch (err) {
+      logger.error(`Transcript PDF error: ${errMsg(err)}`)
+      return c.json({ error: 'Failed to generate PDF' }, 500)
+    }
   })
 
   // ── Admin auth middleware ───────────────────────────────────────────────
