@@ -244,7 +244,7 @@ Hono app wiring all routes:
 
 **Chat (`/`)**
 - `GET /` — serves the chat UI
-- `POST /` — accepts `{ messages }`, searches chunks using the last user message (FTS5, stopword-filtered, OR semantics), builds a system prompt with matching excerpts (title | speaker | date | timestamp | URL), streams a Claude SSE response
+- `POST /` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given two read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`): `search_sermon_excerpts` (FTS5 chunk search, a relevant sample) and `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
 
 **Transcripts (`/transcripts/*`)** — public, read-only transcript delivery
 - `GET /transcripts` — serves the transcripts search/table UI (HTML)
@@ -282,14 +282,17 @@ Member opens browser → GET /
     → chatHtml served
 
 Member types question → POST / { messages: [...] }
-    → find last user message
-    → searchChunks(lastUserMessage, 10)   FTS5, stopwords filtered, OR semantics
-    → build system prompt with chunk excerpts (title | speaker | date | URL)
-    → stream SSE response:
-        { type: 'context', sources }      sent first (populates Sources widget)
-        { type: 'delta', text }           streamed token by token
-        { type: 'done' }
-    → Claude answers based solely on provided excerpts
+    → 404 if countSermons() === 0
+    → agentic loop (≤6 steps), each step = anthropic.messages.stream(... CHAT_TOOLS):
+        stream { type: 'delta', text }            token by token
+        finalMessage → stop_reason !== 'tool_use'? end loop
+        else runChatTool() per tool_use block:
+            search_sermon_excerpts → searchChunks(query, 10)   relevant sample
+            list_sermons           → resolveTranscriptSermons  COMPLETE roster
+        { type: 'context', sources }              cumulative citations
+        append tool_result blocks, continue
+    → { type: 'done' }
+    → Claude answers grounded only in tool results
 ```
 
 ## Data Flow: Transcripts
