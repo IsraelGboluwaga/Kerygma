@@ -130,6 +130,110 @@ function describeInterpretation(f: TranscriptQuery, count: number): string {
   return parts.length > 0 ? `${count} ${noun} ${parts.join(' ')}` : `${count} ${noun}`
 }
 
+// ── Chat tool-use ──────────────────────────────────────────────────────────
+// The chat is agentic: rather than feeding Claude a single relevance search,
+// we give it read-only tools so it can choose the right lookup. The key one is
+// list_sermons, which returns the COMPLETE roster for a filter (month, speaker,
+// topic) — so enumeration questions ("all sermons in March") no longer miss
+// sermons that a top-N keyword search happened not to surface.
+type ChatSource = { title: string; date: string; timestamp?: string }
+type ChatToolResult = { text: string; sources: ChatSource[] }
+
+const CHAT_CHUNK_CONTENT_CAP = 800
+
+const CHAT_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'search_sermon_excerpts',
+    description:
+      'Search the full text of all sermons for passages relevant to a topic or question. Returns the most relevant excerpts with sermon title, speaker, date, and timestamp. Use this for "what does X teach about Y" style questions where you need the actual words spoken. This returns a relevant sample, NOT a complete list — never use it to enumerate sermons.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The topic or question to search sermon content for' },
+        speaker: { type: 'string', description: 'Optional speaker name (or partial name) to restrict results to' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'list_sermons',
+    description:
+      'List the COMPLETE set of sermons matching a filter — by month/date, topic, and/or speaker. Returns every matching sermon (title, date, speaker, theme), not just a relevant sample. Use this for any question asking for a full list or count, e.g. "what sermons were preached in March 2023", "list all sermons by Pst. Laju", "which sermons are about faith". When the user refers to "that month/series", resolve it from the conversation first, then call this with the concrete value.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        date: {
+          type: 'string',
+          description: 'Year, month, or day, as YYYY, YYYY-MM, or YYYY-MM-DD (e.g. "2023-03" for all of March 2023)',
+        },
+        topic: { type: 'string', description: 'Subject the sermons are about (e.g. "faith")' },
+        speaker: { type: 'string', description: 'Speaker name or partial name' },
+      },
+    },
+  },
+]
+
+function searchExcerptsTool(query: string, speaker?: string): ChatToolResult {
+  let chunks = searchChunks(query, 10)
+  if (speaker) {
+    const sp = speaker.toLowerCase()
+    chunks = chunks.filter((c) => (c.speaker ?? '').toLowerCase().includes(sp))
+  }
+  if (chunks.length === 0) {
+    return { text: `No sermon excerpts found for "${query}".`, sources: [] }
+  }
+  const sources: ChatSource[] = chunks.map((c) => ({
+    title: c.sermon_title,
+    date: c.date,
+    timestamp: formatTimestamp(c.timestamp_start),
+  }))
+  const text = chunks
+    .map((c) => {
+      const url = c.webpage_url ?? c.download_url ?? null
+      const header = [
+        c.sermon_title,
+        c.speaker ?? 'Unknown',
+        c.date,
+        formatTimestamp(c.timestamp_start),
+        ...(url ? [`URL: ${url}`] : []),
+      ].join(' | ')
+      return `[${header}]\n${c.content.slice(0, CHAT_CHUNK_CONTENT_CAP)}`
+    })
+    .join('\n\n')
+  return { text, sources }
+}
+
+function listSermonsTool(date?: string, topic?: string, speaker?: string): ChatToolResult {
+  let rows = resolveTranscriptSermons({ date, topic, speaker })
+  // No filter at all → fall back to the recent roster rather than nothing.
+  if (rows.length === 0 && !date && !topic && !speaker) rows = listSermons(50)
+  if (rows.length === 0) return { text: 'No sermons matched that filter.', sources: [] }
+
+  const sources: ChatSource[] = rows.map((r) => ({ title: r.title, date: r.date }))
+  const body = rows
+    .map((r) => {
+      const parts = [r.title, r.speaker ?? 'Unknown speaker', r.date]
+      if (r.theme) parts.push(`Theme: ${r.theme}`)
+      if (r.webpage_url) parts.push(`URL: ${r.webpage_url}`)
+      return `• ${parts.join(' | ')}`
+    })
+    .join('\n')
+  return { text: `${rows.length} sermon(s) matched (this is the complete list):\n${body}`, sources }
+}
+
+export function runChatTool(name: string, input: unknown): ChatToolResult {
+  const args = (input ?? {}) as Record<string, unknown>
+  const str = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() ? v.trim() : undefined
+  if (name === 'search_sermon_excerpts') {
+    return searchExcerptsTool(str(args.query) ?? '', str(args.speaker))
+  }
+  if (name === 'list_sermons') {
+    return listSermonsTool(str(args.date), str(args.topic), str(args.speaker))
+  }
+  return { text: `Unknown tool: ${name}`, sources: [] }
+}
+
 export function createRouter(anthropic: Anthropic): Hono {
   const app = new Hono()
 
@@ -172,47 +276,28 @@ export function createRouter(anthropic: Anthropic): Hono {
       return c.json({ error: 'messages array is required' }, 400)
     }
 
-    let lastUserMessage = messages[0].content
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') { lastUserMessage = messages[i].content; break }
-    }
-
-    const chunks = searchChunks(lastUserMessage, 10)
-    if (chunks.length === 0) {
+    if (countSermons() === 0) {
       return c.json(
         { error: 'No sermons indexed yet. Ask an administrator to ingest some first.' },
         404
       )
     }
 
-    const sources = chunks.map((ch) => ({
-      title: ch.sermon_title,
-      date: ch.date,
-      timestamp: formatTimestamp(ch.timestamp_start),
+    // Conversation history, as-is. Each turn re-runs the agentic loop from
+    // scratch (no server-side session) — the tools re-query the DB live.
+    const convo: Anthropic.MessageParam[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
     }))
-
-    const context = chunks
-      .map((ch) => {
-        const url = ch.webpage_url ?? ch.download_url ?? null
-        const header = [
-          ch.sermon_title,
-          ch.speaker ?? 'Unknown',
-          ch.date,
-          formatTimestamp(ch.timestamp_start),
-          ...(url ? [`URL: ${url}`] : []),
-        ].join(' | ')
-        return `[${header}]\n${ch.content}`
-      })
-      .join('\n\n')
 
     const systemPrompt = [
       `You are a sermon assistant for ${config.MINISTRY_NAME}.`,
-      'If the user sends a greeting or makes small talk, welcome them warmly, introduce yourself as a sermon assistant, and invite them to ask about the sermons — do not reference any sermon content.',
-      'For sermon questions, answer based solely on the excerpts below.',
-      'When referencing content, cite the exact sermon title, speaker, date, and timestamp as they appear in the excerpt headers.',
-      'If the question cannot be answered from the excerpts, say so clearly.',
-      '',
-      context,
+      'You have read-only tools to look up the sermon library. Ground every answer about sermons in a tool result — never answer sermon questions from general knowledge.',
+      '- For questions about what was taught on a topic, use search_sermon_excerpts and cite the title, speaker, date, and timestamp.',
+      '- For questions that ask for a list or count of sermons — by month, date, speaker, or topic — use list_sermons. Its result is the COMPLETE, authoritative set for that filter. Present the full list and do NOT add disclaimers like "these are only the ones in the excerpts I was given".',
+      '- Do not enumerate sermons from search_sermon_excerpts results; that tool returns a relevant sample and will miss sermons.',
+      'When the user refers to "that month", "that series", or a previous result, resolve it from the conversation, then call the tool with the concrete value.',
+      'If the user sends a greeting or makes small talk, welcome them warmly as a sermon assistant and invite them to ask about the sermons — do not call any tool.',
     ].join('\n')
 
     c.header('Content-Type', 'text/event-stream')
@@ -220,24 +305,54 @@ export function createRouter(anthropic: Anthropic): Hono {
     c.header('Connection', 'keep-alive')
 
     return stream(c, async (s) => {
-      await s.write(`data: ${JSON.stringify({ type: 'context', sources })}\n\n`)
+      const collected: ChatSource[] = []
+      const seen = new Set<string>()
+      const addSource = (src: ChatSource): void => {
+        const key = `${src.title}|${src.date}|${src.timestamp ?? ''}`
+        if (!seen.has(key)) { seen.add(key); collected.push(src) }
+      }
 
       try {
-        const msgStream = await anthropic.messages.create({
-          model: config.CLAUDE_MODEL,
-          max_tokens: 2048,
-          system: systemPrompt,
-          messages: messages as Array<{ role: 'user' | 'assistant'; content: string }>,
-          stream: true,
-        })
+        // Agentic loop: stream each turn's text; if the turn requests tools,
+        // run them, feed the results back, and continue. Capped to avoid loops.
+        for (let step = 0; step < 6; step++) {
+          const msgStream = anthropic.messages.stream({
+            model: config.CLAUDE_MODEL,
+            // Headroom for a full list_sermons roster (up to 100 rows) so a
+            // "complete list" answer isn't truncated at the output layer.
+            max_tokens: 3072,
+            // One cache_control breakpoint on the system prompt caches the
+            // tools+system prefix, so the follow-up call(s) in the loop read it
+            // at ~0.1x instead of re-paying full input price.
+            system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+            tools: CHAT_TOOLS,
+            messages: convo,
+          })
 
-        for await (const event of msgStream) {
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          ) {
-            await s.write(`data: ${JSON.stringify({ type: 'delta', text: event.delta.text })}\n\n`)
+          for await (const event of msgStream) {
+            if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+              await s.write(`data: ${JSON.stringify({ type: 'delta', text: event.delta.text })}\n\n`)
+            }
           }
+
+          const final = await msgStream.finalMessage()
+          convo.push({ role: 'assistant', content: final.content })
+
+          if (final.stop_reason !== 'tool_use') break
+
+          const toolResults: Anthropic.ToolResultBlockParam[] = []
+          for (const block of final.content) {
+            if (block.type !== 'tool_use') continue
+            const result = runChatTool(block.name, block.input)
+            result.sources.forEach(addSource)
+            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result.text })
+          }
+
+          // Surface citations as they're discovered, before the answer streams.
+          if (collected.length > 0) {
+            await s.write(`data: ${JSON.stringify({ type: 'context', sources: collected })}\n\n`)
+          }
+          convo.push({ role: 'user', content: toolResults })
         }
 
         await s.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)

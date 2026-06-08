@@ -331,6 +331,22 @@ export function chatHtml(): string {
     return row
   }
 
+  // (Re)render the collapsible sources list on a row. Safe to call repeatedly \u2014
+  // the agentic backend can emit sources after the answer bubble already exists.
+  function applySources(row, sources) {
+    var existing = row.querySelector('details.sources')
+    if (existing) existing.remove()
+    if (!sources || sources.length === 0) return
+    var det = document.createElement('details')
+    det.className = 'sources'
+    var items = sources.map(function (s) {
+      var ts = s.timestamp ? ' [' + esc(s.timestamp) + ']' : ''
+      return '<li>' + esc(s.title) + ' \u2014 ' + esc(s.date) + ts + '</li>'
+    }).join('')
+    det.innerHTML = '<summary>Sources (' + sources.length + ')</summary><ul>' + items + '</ul>'
+    row.appendChild(det)
+  }
+
   function addAssistantBubble(sources) {
     var row = document.createElement('div')
     row.className = 'msg-row assistant'
@@ -339,19 +355,10 @@ export function chatHtml(): string {
     bub.className = 'bubble'
     row.appendChild(bub)
 
-    if (sources && sources.length > 0) {
-      var det = document.createElement('details')
-      det.className = 'sources'
-      var items = sources.map(function (s) {
-        return '<li>' + esc(s.title) + ' \u2014 ' + esc(s.date) + ' [' + esc(s.timestamp) + ']</li>'
-      }).join('')
-      det.innerHTML = '<summary>Sources (' + sources.length + ')</summary><ul>' + items + '</ul>'
-      row.appendChild(det)
-    }
-
     msgList.appendChild(row)
+    applySources(row, sources)
     scroll()
-    return bub
+    return row
   }
 
   // ── SSE stream reader ───────────────────────────────────────────────────
@@ -359,6 +366,7 @@ export function chatHtml(): string {
     var reader  = response.body.getReader()
     var dec     = new TextDecoder()
     var buf     = ''
+    var row     = null
     var bubble  = null
     var text    = ''
     var sources = null
@@ -386,8 +394,9 @@ export function chatHtml(): string {
 
             if (ev.type === 'context') {
               sources = ev.sources || null
+              if (row) applySources(row, sources)
             } else if (ev.type === 'delta') {
-              if (!bubble) bubble = addAssistantBubble(sources)
+              if (!bubble) { row = addAssistantBubble(sources); bubble = row.querySelector('.bubble') }
               text += ev.text
               bubble.innerHTML = marked.parse(text)
               scroll()

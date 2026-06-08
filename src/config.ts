@@ -9,7 +9,7 @@ const envSchema = z.object({
   DB_PATH: z.string().default('./data/sermons.db'),
   PORT: z.coerce.number().int().positive().default(3000),
   MAX_AUDIO_DURATION_SECONDS: z.coerce.number().int().positive().default(7200),
-  CLAUDE_MODEL: z.string().default('claude-sonnet-4-20250514'),
+  CLAUDE_MODEL: z.string().default('claude-sonnet-4-6'),
   CHUNKING_MODEL: z.string().default('claude-haiku-4-5-20251001'),
   SERMON_BASE_URL: z.string().url('SERMON_BASE_URL must be a valid URL'),
   AUDIO_BASE_URL: z.string().url('AUDIO_BASE_URL must be a valid URL'),

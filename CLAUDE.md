@@ -58,7 +58,7 @@ Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md
 | `DB_PATH` | No | `./data/sermons.db` | SQLite path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap for ingested audio |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chat synthesis |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
 | `LOG_LEVEL` | No | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
 | `R2_ACCOUNT_ID` | No | — | Cloudflare account ID; required for Litestream R2 replication |
@@ -110,6 +110,13 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - All Claude calls inside MCP tools must use `withRetry()`.
 - Speaker disambiguation and nearest-date fallback are required for any tool that accepts a speaker or date argument — reuse `resolveSpeaker` and `nearestDateMessage`.
 - Register tools through the loosely-typed `tool` boundary (`server.tool.bind(server) as unknown as RegisterTool`) in `createMcpServer`, not `server.tool` directly. The SDK's generic overload forces `tsc` to instantiate `ShapeOutput<Args>` over both bundled Zod v3/v4 type machineries, which exploded `yarn typecheck` to ~18M instantiations (~3.5 min). The boundary skips that inference; each handler keeps its own explicit `{ ... }` arg type and `Promise<CallToolResult>` return type. Do **not** reintroduce `@ts-expect-error` suppressions — they hide the error but `tsc` still does all the work.
+
+### Chat
+- The chat (`POST /` in `src/web/router.ts`) is **agentic**: Claude is given read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`) and chooses the lookup. Do **not** revert to a single pre-baked `searchChunks` call stuffed into the prompt — that under-serves enumeration questions.
+- **Enumeration must use `list_sermons`, not excerpt search.** A top-N relevance search (`searchChunks`) returns a *sample* and silently drops sermons, so "what sermons were preached that month?" came back incomplete. `list_sermons` returns the **complete** roster for a date/topic/speaker filter via `resolveTranscriptSermons`. Keep the system-prompt instruction that forbids "these are only the excerpts I was given" disclaimers when answering from `list_sermons`.
+- Keep the single `cache_control` breakpoint on the chat system prompt: the tools+system prefix is byte-identical across the loop's calls, so it reads at ~0.1× input cost. Don't interpolate per-request values into that system prompt (it would break the cache).
+- The agentic loop is capped (`step < 6`). Keep a cap — an uncapped tool loop can run away.
+- Sources stream as `context` events *after* tools run (not before the answer), so the frontend `applySources()` must remain able to attach/refresh the `<details>` on an existing bubble.
 
 ### Transcripts page
 - Transcript text comes from the `transcriptions` table (`getTranscriptionBySermonId`) — the verbatim copy. Do not rebuild it from chunks.
