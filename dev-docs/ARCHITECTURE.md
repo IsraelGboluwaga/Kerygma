@@ -234,7 +234,7 @@ Returns the HTML string for a single viewable transcript (`GET /transcripts/:vid
 `generateTranscriptPdf(sermon, transcript)` renders a transcript to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser; sub-second even for a 2-hour sermon). `transcriptPdfFilename(sermon)` builds the `theme__title__month-year.pdf` download name (theme falls back to `sermon`).
 
 ### `src/web/transcriptQuery.ts`
-`parseTranscriptQuery(text, anthropic)` uses the cheap `CHUNKING_MODEL` (wrapped in `withRetry`) to extract structured `{ date?, theme?, speaker? }` filters from a free-text request. Returns `{}` on any parse failure so the route can fall back to a raw keyword search.
+`parseTranscriptQuery(text, anthropic)` uses the cheap `CHUNKING_MODEL` (wrapped in `withRetry`) to extract structured `{ date?, topic?, speaker? }` filters from a free-text request. `topic` is the subject the sermon should be *about* (e.g. "faith"), resolved by relevance — not a formal theme name. Returns `{}` on any parse failure so the route can fall back to a raw keyword search.
 
 ### `src/web/transcriptFormat.ts`
 Pure formatting helpers shared by the transcripts table, view, and PDF: `formatSermonDate` ("4 July 2021"), `humanizeDatePrefix` ("February 2023"), `monthYearSlug` ("july-2021"), and `slugify`.
@@ -248,7 +248,7 @@ Hono app wiring all routes:
 
 **Transcripts (`/transcripts/*`)** — public, read-only transcript delivery
 - `GET /transcripts` — serves the transcripts search/table UI (HTML)
-- `GET /transcripts/search` — accepts `q` (natural-language, parsed via `parseTranscriptQuery`) **or** structured `month`/`year`/`theme`/`speaker` params; returns `{ interpreted, sermons[] }`. Date and theme combine; theme falls back to FTS keyword search when it isn't a formal theme. Registered before `/transcripts/:videoId` so "search" isn't read as a video id
+- `GET /transcripts/search` — accepts `q` (natural-language, parsed via `parseTranscriptQuery`) **or** structured `month`/`year`/`theme`/`topic`/`speaker` params; returns `{ interpreted, sermons[] }`. Filters combine (base set by priority topic > theme > date > speaker, then the rest applied as predicates). `topic` is a **relevance** search over each sermon's Claude-derived section topics/summaries (`searchSermonsByTopic`), ranked by density — so "faith" returns sermons *geared towards* faith, not every sermon that says the word. Registered before `/transcripts/:videoId` so "search" isn't read as a video id
 - `GET /transcripts/:videoId` — serves the viewable transcript (HTML, rendered from `transcriptions.segments`)
 - `GET /transcripts/:videoId/download` — streams an on-demand PDF (`application/pdf`, `Content-Disposition: attachment`)
 
@@ -298,11 +298,13 @@ Member types question → POST / { messages: [...] }
 Member opens browser → GET /transcripts
     → transcriptsHtml served (theme dropdown filled from listThemes())
 
-Member searches → GET /transcripts/search?q=... (or ?month=&year=&theme=&speaker=)
-    → q present:  parseTranscriptQuery() → { date?, theme?, speaker? }
-                  (no structured match → searchSermons() keyword fallback)
-      structured: month+year → date prefix; theme/speaker applied directly
-    → resolveTranscriptSermons() applies date/theme/speaker filters
+Member searches → GET /transcripts/search?q=... (or ?month=&year=&theme=&topic=&speaker=)
+    → q present:  parseTranscriptQuery() → { date?, topic?, speaker? }
+                  (nothing parsed → searchSermons() keyword fallback)
+      structured: month+year → date prefix; theme/topic/speaker applied directly
+    → resolveTranscriptSermons(): base by priority topic > theme > date > speaker,
+      then remaining filters applied. topic = relevance search over section
+      topics/summaries (searchSermonsByTopic), ranked by density
     → JSON { interpreted, sermons: [{ title, dateFormatted, theme, excerpt,
              hasTranscript, viewUrl, downloadUrl }] }
 

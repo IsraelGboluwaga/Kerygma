@@ -22,22 +22,22 @@ describe('parseTranscriptQuery', () => {
     expect(out).toEqual({ date: '2023-02' })
   })
 
-  it('extracts a theme', async () => {
-    const out = await parseTranscriptQuery('x', fakeAnthropic('{"theme":"faith"}'))
-    expect(out).toEqual({ theme: 'faith' })
+  it('extracts a topic', async () => {
+    const out = await parseTranscriptQuery('x', fakeAnthropic('{"topic":"faith"}'))
+    expect(out).toEqual({ topic: 'faith' })
   })
 
   it('extracts combined filters', async () => {
     const out = await parseTranscriptQuery(
       'x',
-      fakeAnthropic('{"date":"2023","theme":"grace","speaker":"John"}')
+      fakeAnthropic('{"date":"2023","topic":"grace","speaker":"John"}')
     )
-    expect(out).toEqual({ date: '2023', theme: 'grace', speaker: 'John' })
+    expect(out).toEqual({ date: '2023', topic: 'grace', speaker: 'John' })
   })
 
   it('strips code fences', async () => {
-    const out = await parseTranscriptQuery('x', fakeAnthropic('```json\n{"theme":"hope"}\n```'))
-    expect(out).toEqual({ theme: 'hope' })
+    const out = await parseTranscriptQuery('x', fakeAnthropic('```json\n{"topic":"hope"}\n```'))
+    expect(out).toEqual({ topic: 'hope' })
   })
 
   it('rejects malformed dates', async () => {

@@ -116,6 +116,7 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - PDFs are generated on demand with `pdfkit` (pure JS) in `src/web/transcriptPdf.ts`. Do **not** swap in a headless-browser renderer (Puppeteer/Playwright) — it would add a browser process and hundreds of MB of RAM to this single-process app.
 - `/transcripts/search` must be registered before `/transcripts/:videoId` so the static path isn't captured as a video id.
 - The natural-language query parser (`parseTranscriptQuery`) uses `CHUNKING_MODEL` via `withRetry` and must degrade to `{}` (then a keyword fallback) rather than erroring.
+- A subject like "on faith" is a **topic** (relevance), not a formal **theme**. `searchSermonsByTopic` matches the term only in the Claude-derived `topics`/`summary` FTS columns and ranks by density (share of sections about it) — do not resolve a topic with a bare content keyword match, which for common words like "faith" matches nearly every sermon.
 
 ### Testing
 - Tests live in `tests/`. Use Vitest.

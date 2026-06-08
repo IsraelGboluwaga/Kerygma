@@ -17,6 +17,7 @@ import {
   getSermonsByDate,
   getSermonsByThemeName,
   searchSermons,
+  searchSermonsByTopic,
   getTranscriptionBySermonId,
   type SermonRow,
 } from '../db/queries.js'
@@ -65,25 +66,36 @@ function checkRateLimit(ip: string): boolean {
 
 const MAX_TRANSCRIPT_RESULTS = 100
 
-// Apply the resolved date/theme/speaker filters to the sermon corpus. Date and
-// theme combine (date-scoped then theme-filtered); speaker narrows whatever set
-// results. Theme falls back to an FTS keyword search when it isn't a formal theme.
+// Resolve the filters to a sermon list. A base set is chosen by priority —
+// topic (relevance) > theme (formal) > date > speaker — then the remaining
+// filters are applied as predicates. `topic` is a relevance search over the
+// sermon's section topics/summaries (what it is *about*), not a bare keyword
+// match, so a common word like "faith" returns sermons geared towards faith
+// rather than every sermon that happens to say it.
 function resolveTranscriptSermons(f: TranscriptQuery): SermonRow[] {
   let rows: SermonRow[]
-  if (f.date && f.theme) {
-    const theme = f.theme.toLowerCase()
-    rows = getSermonsByDate(f.date).filter((r) => (r.theme ?? '').toLowerCase().includes(theme))
-  } else if (f.date) {
-    rows = getSermonsByDate(f.date)
+  let themeApplied = false
+
+  if (f.topic) {
+    rows = searchSermonsByTopic(f.topic, MAX_TRANSCRIPT_RESULTS)
+    // If the chunker never tagged the topic, it may still be a formal theme.
+    if (rows.length === 0) rows = getSermonsByThemeName(f.topic)
   } else if (f.theme) {
     rows = getSermonsByThemeName(f.theme)
-    if (rows.length === 0) rows = searchSermons(f.theme, MAX_TRANSCRIPT_RESULTS)
+    themeApplied = true
+  } else if (f.date) {
+    rows = getSermonsByDate(f.date)
   } else if (f.speaker) {
     rows = listSermons(500)
   } else {
     return []
   }
 
+  if (f.date) rows = rows.filter((r) => r.date.startsWith(f.date as string))
+  if (f.theme && !themeApplied) {
+    const theme = f.theme.toLowerCase()
+    rows = rows.filter((r) => (r.theme ?? '').toLowerCase().includes(theme))
+  }
   if (f.speaker) {
     const sp = f.speaker.toLowerCase()
     rows = rows.filter((r) => (r.speaker ?? '').toLowerCase().includes(sp))
@@ -110,7 +122,8 @@ function toTranscriptRow(s: SermonRow): Record<string, unknown> {
 // Human-readable summary of what was searched, shown above the results.
 function describeInterpretation(f: TranscriptQuery, count: number): string {
   const parts: string[] = []
-  if (f.theme) parts.push(`on “${f.theme}”`)
+  if (f.topic) parts.push(`about “${f.topic}”`)
+  if (f.theme) parts.push(`in “${f.theme}”`)
   if (f.speaker) parts.push(`by ${f.speaker}`)
   if (f.date) parts.push(`from ${humanizeDatePrefix(f.date)}`)
   const noun = count === 1 ? 'transcript' : 'transcripts'
@@ -249,8 +262,8 @@ export function createRouter(anthropic: Anthropic): Hono {
     if (q) {
       filters = await parseTranscriptQuery(q, anthropic)
       sermons = resolveTranscriptSermons(filters)
-      // Nothing structured matched — treat the raw text as keywords.
-      if (sermons.length === 0 && !filters.date && !filters.speaker) {
+      // The parser found nothing structured — treat the raw text as keywords.
+      if (sermons.length === 0 && !filters.date && !filters.topic && !filters.speaker) {
         sermons = searchSermons(q, MAX_TRANSCRIPT_RESULTS)
       }
     } else {
@@ -260,6 +273,7 @@ export function createRouter(anthropic: Anthropic): Hono {
       filters = {
         date,
         theme: c.req.query('theme')?.trim() || undefined,
+        topic: c.req.query('topic')?.trim() || undefined,
         speaker: c.req.query('speaker')?.trim() || undefined,
       }
       sermons = resolveTranscriptSermons(filters)

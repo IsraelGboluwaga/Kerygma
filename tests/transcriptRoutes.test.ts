@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type Anthropic from '@anthropic-ai/sdk'
 import { initDatabase } from '../src/db/connection.js'
-import { saveSermon, insertTranscription, getSermonByVideoId } from '../src/db/queries.js'
+import {
+  saveSermon,
+  saveChunks,
+  insertTranscription,
+  getSermonByVideoId,
+} from '../src/db/queries.js'
 import { createRouter } from '../src/web/router.js'
 
 // Anthropic is only hit on the natural-language search path; these tests use the
@@ -29,6 +34,16 @@ function seed(): string {
       { text: 'Faith is trust.', start: 3, duration: 2 },
     ])
   )
+  saveChunks(id, [
+    {
+      section_name: 'Intro',
+      content: 'We begin with faith.',
+      topics: ['faith', 'trust'],
+      summary: 'An exhortation to walk by faith.',
+      timestamp_start: 0,
+      timestamp_end: 3,
+    },
+  ])
   return videoId
 }
 
@@ -55,6 +70,32 @@ describe('transcripts routes', () => {
     expect(body.sermons[0].hasTranscript).toBe(true)
     expect(body.sermons[0].dateFormatted).toBe('12 February 2023')
     expect(body.sermons[0].downloadUrl).toBe('/transcripts/seed-vid-0001/download')
+  })
+
+  it('GET /transcripts/search (topic) returns sermons about the subject', async () => {
+    seed()
+    // A sermon that merely mentions "faith" in content but is not about it.
+    const id = saveSermon({
+      video_id: 'money-vid',
+      title: 'On Money',
+      date: '2023-03-01',
+      download_url: 'https://example.com/m.mp3',
+    })
+    saveChunks(id, [
+      {
+        section_name: 'Intro',
+        content: 'He kept the faith while budgeting.',
+        topics: ['money'],
+        summary: 'Giving wisely.',
+        timestamp_start: 0,
+        timestamp_end: 5,
+      },
+    ])
+
+    const app = createRouter(stubAnthropic)
+    const body = await (await app.request('/transcripts/search?topic=faith')).json()
+    expect(body.sermons.map((s: { title: string }) => s.title)).toEqual(['Walking By Faith'])
+    expect(body.interpreted).toContain('about')
   })
 
   it('GET /transcripts/search (structured date) filters by month/year', async () => {
