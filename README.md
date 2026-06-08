@@ -289,6 +289,8 @@ sermons        (id, video_id, title, date, download_url, webpage_url, speaker, e
 transcriptions (id, sermon_id, transcript, segments, created_at)
 chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
 chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
+jobs           (id, title, download_url, payload, status, phase, message, error, created_at, started_at, completed_at)
+missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, theme, kind, reason, created_at, updated_at)
 ```
 
 `video_id` comes from the sermon API's `_id` field, or falls back to `SHA256(downloadUrl).slice(0, 16)` for manually-ingested URLs.
@@ -296,6 +298,7 @@ chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 `excerpt` stores the short summary from the sermon listing API (kept on `sermons` for fast list/card rendering).
 `ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete.
 `transcriptions` stores the full plain-text transcript and JSON segment array separately from `sermons` to keep sermon queries fast.
+`missing_sermons` holds sermons that failed to ingest, keyed by `video_id` so retries upsert and a successful ingest clears the row. `kind` classifies the failure (`no_audio` — `download_url` was just `AUDIO_BASE_URL` with no path; `too_long`; `timeout` — transient, retried on next sync; `error`). Server-restart failures are not recorded. Browse it under `/lyrical-theology`.
 
 ---
 

@@ -445,6 +445,77 @@ export function failStaleJobs(): void {
     .run()
 }
 
+// ── Missing sermons ──────────────────────────────────────────────────────────
+
+export type MissingSermonKind = 'no_audio' | 'too_long' | 'timeout' | 'error'
+
+export interface MissingSermonRow {
+  id: number
+  video_id: string
+  title: string
+  date: string | null
+  download_url: string | null
+  webpage_url: string | null
+  speaker: string | null
+  theme: string | null
+  kind: MissingSermonKind
+  reason: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RecordMissingSermonInput {
+  video_id: string         // stable identity so retries upsert instead of duplicating
+  title: string
+  date?: string
+  download_url?: string
+  webpage_url?: string
+  speaker?: string
+  theme?: string
+  kind: MissingSermonKind
+  reason: string
+}
+
+export function recordMissingSermon(data: RecordMissingSermonInput): void {
+  getDb()
+    .prepare(
+      `INSERT INTO missing_sermons (video_id, title, date, download_url, webpage_url, speaker, theme, kind, reason)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @theme, @kind, @reason)
+       ON CONFLICT(video_id) DO UPDATE SET
+         title        = excluded.title,
+         date         = excluded.date,
+         download_url = excluded.download_url,
+         webpage_url  = excluded.webpage_url,
+         speaker      = excluded.speaker,
+         theme        = excluded.theme,
+         kind         = excluded.kind,
+         reason       = excluded.reason,
+         updated_at   = datetime('now')`
+    )
+    .run({
+      video_id: data.video_id,
+      title: data.title,
+      date: data.date ?? null,
+      download_url: data.download_url ?? null,
+      webpage_url: data.webpage_url ?? null,
+      speaker: data.speaker ?? null,
+      theme: data.theme ?? null,
+      kind: data.kind,
+      reason: data.reason,
+    })
+}
+
+export function listMissingSermons(limit = 50): MissingSermonRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM missing_sermons ORDER BY updated_at DESC LIMIT ?`)
+    .all(limit) as MissingSermonRow[]
+}
+
+/** Removes a missing-sermon entry once it has been successfully ingested. */
+export function removeMissingSermon(videoId: string): void {
+  getDb().prepare(`DELETE FROM missing_sermons WHERE video_id = ?`).run(videoId)
+}
+
 // ── Config key-value store ───────────────────────────────────────────────────
 
 export function getConfig(key: string): string | null {

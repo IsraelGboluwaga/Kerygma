@@ -369,7 +369,7 @@ export function createRouter(anthropic: Anthropic): Hono {
   })
 
   // ── DB Browser UI + data API ───────────────────────────────────────────
-  const DB_TABLES = new Set(['sermons', 'themes', 'transcriptions', 'chunks', 'jobs'])
+  const DB_TABLES = new Set(['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons'])
 
   app.get('/lyrical-theology', (c) => c.html(dbHtml()))
 

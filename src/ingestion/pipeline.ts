@@ -12,7 +12,10 @@ import {
   saveChunks,
   insertTranscription,
   getTranscriptionBySermonId,
+  recordMissingSermon,
+  removeMissingSermon,
   type ThemeInput,
+  type MissingSermonKind,
 } from '../db/queries.js'
 import type { TranscriptSegment } from './transcriber.js'
 import { downloadMp3 } from './downloader.js'
@@ -62,6 +65,60 @@ function defaultTitle(url: string): string {
     return path.basename(pathname, path.extname(pathname)) || url
   } catch {
     return url
+  }
+}
+
+function normalizeUrl(url: string): string {
+  return url.trim().replace(/\/+$/, '')
+}
+
+// A download URL with no audio to fetch: empty, or just AUDIO_BASE_URL with no
+// file path appended. The API source builds this when a sermon's audio_url is
+// blank (joinUrl(AUDIO_BASE_URL, '') === AUDIO_BASE_URL). Detected before the
+// download step so we record a clear reason instead of a doomed fetch.
+function hasNoAudioPath(url: string | undefined): boolean {
+  const trimmed = url?.trim()
+  if (!trimmed) return true
+  return normalizeUrl(trimmed) === normalizeUrl(config.AUDIO_BASE_URL)
+}
+
+// Classify a failure so the missing_sermons table distinguishes transient
+// problems (timeouts — retried automatically on the next sync) from permanent
+// ones (no audio URL — needs an upstream fix).
+function classifyFailure(err: unknown): MissingSermonKind {
+  if (err instanceof AudioTooLongError) return 'too_long'
+  const name = err instanceof Error ? err.name : ''
+  const msg = errMsg(err).toLowerCase()
+  if (name === 'TimeoutError' || name === 'AbortError' || /timed out|timeout|aborted/.test(msg)) {
+    return 'timeout'
+  }
+  return 'error'
+}
+
+function recordMissing(req: IngestRequest, videoId: string, kind: MissingSermonKind, reason: string): void {
+  try {
+    recordMissingSermon({
+      video_id: videoId,
+      title: req.title || defaultTitle(req.downloadUrl),
+      date: req.date,
+      download_url: req.downloadUrl || undefined,
+      webpage_url: req.webpageUrl,
+      speaker: req.speaker,
+      theme: req.theme?.name,
+      kind,
+      reason,
+    })
+  } catch (err) {
+    logger.warn(`Failed to record missing sermon "${req.title}": ${errMsg(err)}`)
+  }
+}
+
+// A successful ingest clears any prior missing-sermon entry for the same video.
+function clearMissing(videoId: string): void {
+  try {
+    removeMissingSermon(videoId)
+  } catch (err) {
+    logger.warn(`Failed to clear missing sermon ${videoId}: ${errMsg(err)}`)
   }
 }
 
@@ -123,6 +180,7 @@ export async function ingestSermon(
       }
       const segments = JSON.parse(segmentsJson) as TranscriptSegment[]
       const chunkCount = await chunkEmbedSave(existing.id, title, segments, anthropic, onPhase)
+      clearMissing(videoId)
       return {
         status: 'ok',
         message: `Ingested "${title}" — ${chunkCount} chunk(s)`,
@@ -130,17 +188,27 @@ export async function ingestSermon(
       }
     } catch (err) {
       const message = errMsg(err)
+      recordMissing(req, videoId, classifyFailure(err), message)
       return { status: 'error', message }
     }
   }
 
   // Already fully ingested
   if (existing) {
+    clearMissing(videoId)
     return {
       status: 'duplicate',
       message: `Already ingested: "${existing.title}" (id=${existing.id})`,
       sermonId: existing.id,
     }
+  }
+
+  // No audio to fetch — record for review instead of attempting a doomed download
+  if (hasNoAudioPath(req.downloadUrl)) {
+    const message = `No audio for "${title}" — download_url has no file path appended to the audio base`
+    logger.warn(message)
+    recordMissing(req, videoId, 'no_audio', message)
+    return { status: 'error', message }
   }
 
   let cleanup: (() => void) | undefined
@@ -183,6 +251,7 @@ export async function ingestSermon(
 
     const chunkCount = await chunkEmbedSave(sermonId, title, segments, anthropic, onPhase)
 
+    clearMissing(videoId)
     return {
       status: 'ok',
       message: `Ingested "${title}" — ${chunkCount} chunk(s)`,
@@ -190,9 +259,11 @@ export async function ingestSermon(
     }
   } catch (err) {
     if (err instanceof AudioTooLongError) {
+      recordMissing(req, videoId, 'too_long', err.message)
       return { status: 'too_long', message: err.message }
     }
     const message = err instanceof Error ? err.message : String(err)
+    recordMissing(req, videoId, classifyFailure(err), message)
     return { status: 'error', message }
   } finally {
     cleanup?.()

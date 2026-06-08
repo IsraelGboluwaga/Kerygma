@@ -62,11 +62,30 @@ export function initDb(db: Database.Database): void {
       completed_at TEXT
     );
 
+    -- Sermons that could not be ingested (no audio path, too long, timeout, etc.)
+    -- so an admin can review them in the DB browser. Keyed by video_id (the API's
+    -- stable _id) so retries upsert. Server-restart failures are NOT recorded here.
+    CREATE TABLE IF NOT EXISTS missing_sermons (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id     TEXT UNIQUE NOT NULL,
+      title        TEXT NOT NULL,
+      date         TEXT,
+      download_url TEXT,
+      webpage_url  TEXT,
+      speaker      TEXT,
+      theme        TEXT,
+      kind         TEXT NOT NULL DEFAULT 'error',  -- no_audio | too_long | timeout | error
+      reason       TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sermon_date         ON sermons(date);
     CREATE INDEX IF NOT EXISTS idx_sermon_video_id     ON sermons(video_id);
     CREATE INDEX IF NOT EXISTS idx_chunk_sermon_id     ON chunks(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_transcription_sermon ON transcriptions(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_job_created       ON jobs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_missing_updated   ON missing_sermons(updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS config (
       key   TEXT PRIMARY KEY,

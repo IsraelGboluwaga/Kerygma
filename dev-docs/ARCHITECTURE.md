@@ -262,7 +262,7 @@ Hono app wiring all routes:
 
 **DB Browser (`/lyrical-theology/*`)** — password-gated read-only table explorer
 - `GET /lyrical-theology` — serves the DB browser UI (HTML)
-- `GET /lyrical-theology/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, or `jobs` (protected); accepts `limit` and `offset` query params
+- `GET /lyrical-theology/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, `jobs`, or `missing_sermons` (protected); accepts `limit` and `offset` query params
 
 ### `src/main.ts`
 Sequential startup:
@@ -436,7 +436,26 @@ CREATE TABLE jobs (
     started_at   TEXT,
     completed_at TEXT
 );
+
+-- Sermons that failed to ingest (no audio path, too long, timeout, error).
+-- Server-restart failures are NOT recorded here.
+CREATE TABLE missing_sermons (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    video_id     TEXT UNIQUE NOT NULL,    -- API _id, so retries upsert
+    title        TEXT NOT NULL,
+    date         TEXT,
+    download_url TEXT,
+    webpage_url  TEXT,
+    speaker      TEXT,
+    theme        TEXT,
+    kind         TEXT NOT NULL DEFAULT 'error',  -- no_audio | too_long | timeout | error
+    reason       TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ```
+
+The ingestion pipeline upserts a `missing_sermons` row whenever it returns `error`/`too_long`, and deletes the row once the same `video_id` ingests successfully. A `download_url` equal to `AUDIO_BASE_URL` (the API source builds this when `audio_url` is blank) short-circuits before download as `kind = 'no_audio'`. `kind = 'timeout'` marks transient failures that the next API sync retries. Browse it at `/lyrical-theology`.
 
 Migration shims in `schema.ts` handle existing databases: `ALTER TABLE` statements run only when a column is absent, so an old DB survives an upgrade without data loss.
 
