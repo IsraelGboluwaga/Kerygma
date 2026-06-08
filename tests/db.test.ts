@@ -16,6 +16,9 @@ import {
   listSermons,
   getSermonsByTheme,
   listThemes,
+  recordMissingSermon,
+  listMissingSermons,
+  removeMissingSermon,
   type SaveSermonInput,
   type SaveChunkInput,
 } from '../src/db/queries.js'
@@ -296,6 +299,48 @@ describe('themes', () => {
     const row = getSermonByVideoId('abc123def456abcd')
     expect(row!.theme).toBeNull()
     expect(row!.theme_id).toBeNull()
+  })
+})
+
+describe('missing sermons', () => {
+  it('records a failed sermon and lists it', () => {
+    recordMissingSermon({
+      video_id: 'vid-no-audio',
+      title: 'No Audio Sermon',
+      date: '2024-03-10',
+      download_url: 'https://media.example.org/audio',
+      webpage_url: 'https://youtu.be/abc',
+      speaker: 'Pastor Test',
+      theme: 'Faith Foundations',
+      kind: 'no_audio',
+      reason: 'No audio — download_url has no file path',
+    })
+
+    const rows = listMissingSermons()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].title).toBe('No Audio Sermon')
+    expect(rows[0].kind).toBe('no_audio')
+    expect(rows[0].theme).toBe('Faith Foundations')
+  })
+
+  it('upserts on the same video_id instead of duplicating', () => {
+    recordMissingSermon({ video_id: 'vid-1', title: 'A', kind: 'timeout', reason: 'first' })
+    recordMissingSermon({ video_id: 'vid-1', title: 'A', kind: 'error', reason: 'second' })
+
+    const rows = listMissingSermons()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].kind).toBe('error')
+    expect(rows[0].reason).toBe('second')
+  })
+
+  it('removes a missing sermon once resolved', () => {
+    recordMissingSermon({ video_id: 'vid-1', title: 'A', kind: 'error', reason: 'x' })
+    recordMissingSermon({ video_id: 'vid-2', title: 'B', kind: 'error', reason: 'y' })
+    removeMissingSermon('vid-1')
+
+    const rows = listMissingSermons()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].video_id).toBe('vid-2')
   })
 })
 

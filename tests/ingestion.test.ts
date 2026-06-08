@@ -28,6 +28,7 @@ import { downloadMp3 } from '../src/ingestion/downloader.js'
 import { transcribeAudio } from '../src/ingestion/transcriber.js'
 import { chunkSermon } from '../src/ingestion/chunker.js'
 import { ingestSermon, type IngestRequest } from '../src/ingestion/pipeline.js'
+import { listMissingSermons } from '../src/db/queries.js'
 import Anthropic from '@anthropic-ai/sdk'
 
 const mockDownload = vi.mocked(downloadMp3)
@@ -155,6 +156,53 @@ describe('ingestSermon — error paths', () => {
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('error')
     expect(cleanup).toHaveBeenCalledOnce()
+  })
+})
+
+describe('ingestSermon — missing sermons', () => {
+  it('records a missing sermon when ingestion fails', async () => {
+    mockDownload.mockRejectedValue(new Error('Network error'))
+    await ingestSermon(baseRequest, fakeAnthropicClient)
+
+    const missing = listMissingSermons()
+    expect(missing).toHaveLength(1)
+    expect(missing[0].title).toBe('Sunday Service')
+    expect(missing[0].reason).toContain('Network error')
+    expect(missing[0].kind).toBe('error')
+  })
+
+  it('short-circuits before download when download_url is just the audio base', async () => {
+    // AUDIO_BASE_URL in tests/setup.ts is https://sermons-api.test.example.com/
+    const req: IngestRequest = { ...baseRequest, videoId: 'no-audio-1', downloadUrl: 'https://sermons-api.test.example.com/' }
+    const result = await ingestSermon(req, fakeAnthropicClient)
+
+    expect(result.status).toBe('error')
+    expect(result.message).toContain('no file path')
+    expect(mockDownload).not.toHaveBeenCalled()
+
+    const missing = listMissingSermons()
+    expect(missing).toHaveLength(1)
+    expect(missing[0].kind).toBe('no_audio')
+  })
+
+  it('classifies download timeouts as kind "timeout"', async () => {
+    mockDownload.mockRejectedValue(new Error('The operation was aborted due to timeout'))
+    await ingestSermon({ ...baseRequest, videoId: 'timeout-1' }, fakeAnthropicClient)
+
+    const missing = listMissingSermons()
+    expect(missing).toHaveLength(1)
+    expect(missing[0].kind).toBe('timeout')
+  })
+
+  it('clears the missing entry once the sermon ingests successfully', async () => {
+    mockChunk.mockRejectedValueOnce(new Error('Claude API error'))
+    await ingestSermon(baseRequest, fakeAnthropicClient)
+    expect(listMissingSermons()).toHaveLength(1)
+
+    mockChunk.mockResolvedValueOnce(fakeChunks)
+    const second = await ingestSermon(baseRequest, fakeAnthropicClient)
+    expect(second.status).toBe('ok')
+    expect(listMissingSermons()).toHaveLength(0)
   })
 })
 

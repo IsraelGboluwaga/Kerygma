@@ -186,6 +186,7 @@ export function dbHtml(): string {
     <button class="table-btn" data-table="transcriptions">transcriptions</button>
     <button class="table-btn" data-table="chunks">chunks</button>
     <button class="table-btn" data-table="jobs">jobs</button>
+    <button class="table-btn" data-table="missing_sermons">missing_sermons</button>
     <div class="ctrl-divider"></div>
     <button class="icon-btn" id="refresh-btn">Refresh</button>
     <label class="auto-label">
