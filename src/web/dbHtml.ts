@@ -182,6 +182,8 @@ export function dbHtml(): string {
 <div class="main">
   <div class="controls">
     <button class="table-btn active" data-table="sermons">sermons</button>
+    <button class="table-btn" data-table="themes">themes</button>
+    <button class="table-btn" data-table="transcriptions">transcriptions</button>
     <button class="table-btn" data-table="chunks">chunks</button>
     <button class="table-btn" data-table="jobs">jobs</button>
     <div class="ctrl-divider"></div>

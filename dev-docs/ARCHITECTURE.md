@@ -194,7 +194,7 @@ Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMes
 ### `src/web/dbHtml.ts`
 Returns the HTML string for the DB browser (`GET /lyrical-theology`). Contains:
 - A password field (uses `X-Admin-Secret` for data requests)
-- A table selector for `sermons`, `chunks`, and `jobs`
+- A table selector for `sermons`, `themes`, `transcriptions`, `chunks`, and `jobs`
 - A paginated data grid with BLOB columns rendered as `[blob: NB]`
 - Client-side fetch against `GET /lyrical-theology/:table?limit=&offset=`
 
@@ -237,7 +237,7 @@ Hono app wiring all routes:
 
 **DB Browser (`/lyrical-theology/*`)** — password-gated read-only table explorer
 - `GET /lyrical-theology` — serves the DB browser UI (HTML)
-- `GET /lyrical-theology/:table` — returns paginated rows for `sermons`, `chunks`, or `jobs` (protected); accepts `limit` and `offset` query params
+- `GET /lyrical-theology/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, or `jobs` (protected); accepts `limit` and `offset` query params
 
 ### `src/main.ts`
 Sequential startup:
