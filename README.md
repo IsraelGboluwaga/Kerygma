@@ -273,10 +273,10 @@ What has Apostle Emmanuel Iren said about healing?
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
-| `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream R2 replication |
-| `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication |
-| `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key for Litestream replication |
-| `R2_BUCKET` | No | — | R2 bucket name; replication is skipped if any R2 var is unset |
+| `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream replication and dated archive exports |
+| `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication and dated archive exports |
+| `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key for Litestream replication and dated archive exports |
+| `R2_BUCKET` | No | — | R2 bucket name; replication and archive exports are skipped if any R2 var is unset |
 
 ---
 
@@ -328,6 +328,18 @@ Railway uses the `Dockerfile` for builds.
 4. Push to the connected branch — Railway builds the Docker image automatically
 
 The Whisper model is downloaded during the Docker build step and baked into the image layer. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
+
+### Database backups
+
+When all four R2 variables are configured, Litestream continuously replicates SQLite to the stable `sermons/` prefix in R2. The object names under `sermons/generations/...` are Litestream internals and are not meant to be human-readable.
+
+For visual confidence and manual downloads, the app also writes dated plain SQLite exports:
+
+```text
+archives/sermons-2026-06-08T22-15-00Z.db
+```
+
+These archives are created once on startup and then daily at 03:15 UTC. Litestream remains the primary recovery path for data loss because it restores from snapshots plus WAL files to the latest replicated transaction.
 
 ### Layer caching on rebuilds
 

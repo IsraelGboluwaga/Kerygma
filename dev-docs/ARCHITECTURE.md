@@ -51,7 +51,7 @@ McpServer (4 read-only tools)
 Validates `process.env` with Zod on startup. If a required variable is missing, the
 process crashes with a clear error before doing anything else. Exports a frozen singleton.
 
-Key required variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ADMIN_SECRET`, `SERMON_BASE_URL`, `AUDIO_BASE_URL`. Optional: `MINISTRY_NAME`, `CHUNKING_MODEL`, `CLAUDE_MODEL`, `MAX_AUDIO_DURATION_SECONDS`, `DB_PATH`, `PORT`.
+Key required variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ADMIN_SECRET`, `SERMON_BASE_URL`, `AUDIO_BASE_URL`. Optional: `MINISTRY_NAME`, `CHUNKING_MODEL`, `CLAUDE_MODEL`, `MAX_AUDIO_DURATION_SECONDS`, `DB_PATH`, `PORT`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
 
 ### `src/logger.ts`
 Winston-based logger exported as a singleton `logger`. Uses colourised output in
@@ -69,6 +69,12 @@ Anthropic API calls in `src/mcp/server.ts`.
 ### `src/utils.ts`
 Small shared utilities. Currently exports `errMsg(err)` — safely extracts a string from
 any thrown value (`err.message` for `Error` instances, `String(err)` otherwise).
+
+### `src/backup/r2Archive.ts`
+Creates human-readable SQLite archive exports in Cloudflare R2 when all four R2 env vars
+are configured. Uses `better-sqlite3`'s online backup API to create a consistent temp
+database file, then uploads it with an S3-compatible signed `PUT` to
+`archives/sermons-<timestamp>.db`. Runs once on startup and then daily at 03:15 UTC.
 
 ### `src/db/schema.ts`
 Defines the SQLite DDL:
@@ -521,6 +527,16 @@ Container stop / crash
 ### Config file
 
 `litestream.yml` at the repo root uses env-var substitution (`${VAR}`) so no credentials are baked into the image. The replica path inside the bucket is `sermons/`, a stable prefix reused across deploys so restores can find the previous replica.
+
+### Dated archive exports
+
+Litestream object names under `sermons/generations/...` are internal IDs, not human-readable recovery labels. For operator-friendly inspection, the app also writes dated plain SQLite exports to R2 when the same four R2 env vars are configured:
+
+```text
+archives/sermons-2026-06-08T22-15-00Z.db
+```
+
+These archive files are created with SQLite's online backup API, so they are consistent even while the app is running. They are for manual download/inspection and coarse recovery. Litestream remains the primary continuous restore mechanism because it can replay WAL files to the latest replicated transaction.
 
 ### Recovery procedure
 
