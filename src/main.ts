@@ -11,6 +11,7 @@ import { createRouter } from './web/router.js'
 import { waitUntilIdle } from './queue.js'
 import { failStaleJobs } from './db/queries.js'
 import { startScheduler } from './scheduler.js'
+import { startR2ArchiveScheduler } from './backup/r2Archive.js'
 
 async function main() {
   logger.info('Starting up...')
@@ -66,6 +67,7 @@ async function main() {
   })
 
   startScheduler(anthropic)
+  startR2ArchiveScheduler()
 
   // 3. Warm up embedding model in background — server is already accepting requests.
   //    Ingestion jobs that need the embedder will await it naturally via getEmbedder().
