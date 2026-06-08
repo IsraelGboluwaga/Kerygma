@@ -507,7 +507,7 @@ Container start (with R2 vars set)
     │
     └── 3. Continuous replication — Litestream monitors the WAL and streams changes
               to R2 in near-real-time while Node is running
-              (target checkpoint interval: 1 s)
+              (sync interval: 30 s)
 
 Container stop / crash
     └── Litestream flushes remaining WAL frames before exiting;
@@ -520,7 +520,7 @@ Container stop / crash
 
 ### Config file
 
-`litestream.yml` at the repo root uses env-var substitution (`${VAR}`) so no credentials are baked into the image. The replica path inside the bucket is `sermons/`.
+`litestream.yml` at the repo root uses env-var substitution (`${VAR}`) so no credentials are baked into the image. The replica path inside the bucket is `sermons/`, a stable prefix reused across deploys so restores can find the previous replica.
 
 ### Recovery procedure
 
