@@ -1,9 +1,9 @@
 [build]
 builder = "DOCKERFILE"
-watchPatterns = ["src/**", "Dockerfile", "package.json", "yarn.lock", "tsconfig.json", "railway.toml"]
+watchPatterns = ["src/**", "Dockerfile", "docker-entrypoint.sh", "litestream.yml", "package.json", "yarn.lock", "tsconfig.json", "railway.toml", "railway.json"]
 
 [deploy]
-startCommand = "node dist/main.js"
+startCommand = "./docker-entrypoint.sh"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
