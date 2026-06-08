@@ -19,6 +19,7 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 - **Whisper transcription** — local speech-to-text via nodejs-whisper
 - **Claude chunking** — sermon divided into named sections with timestamps, topics, and summaries
 - **FTS5 full-text search** — fast keyword search across all indexed content
+- **Transcripts page** — `/transcripts` finds sermons by date, theme, or keyword (natural-language or structured filters) and delivers viewable transcripts + on-demand PDF download
 - **Embeddings** — 384-dim vectors stored per chunk for future vector search
 - **MCP server** — 4 read-only tools for church members to query via Claude Desktop
 - **In-process job queue** — sequential ingestion, non-blocking admin UI
@@ -44,6 +45,11 @@ Hono HTTP Server (:3000)
     ├── GET  /admin/jobs        → Recent job statuses
     ├── GET  /admin/jobs/:id    → Poll single job
     ├── GET  /admin/status/data → Live queue + phase snapshot
+    ├── GET  /                  → Chat UI
+    ├── GET  /transcripts       → Transcripts search + table
+    ├── GET  /transcripts/search          → Date/theme/keyword results (JSON)
+    ├── GET  /transcripts/:id             → Viewable transcript
+    ├── GET  /transcripts/:id/download    → Transcript PDF
     └── GET  /health            → { ok: true }
          │
     In-process job queue (sequential)
@@ -90,7 +96,12 @@ kerygma/
 │       ├── router.ts              # Hono app — chat, admin, status, and health routes
 │       ├── adminHtml.ts           # Admin form HTML (password-gated, live job polling)
 │       ├── statusHtml.ts          # Live ingestion status dashboard (phase stepper + queue)
-│       └── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
+│       ├── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
+│       ├── transcriptsHtml.ts     # Transcripts search page (NL + structured filters, responsive table)
+│       ├── transcriptViewHtml.ts  # Single viewable transcript (timestamped segments)
+│       ├── transcriptPdf.ts       # pdfkit PDF generator + filename builder
+│       ├── transcriptQuery.ts     # Claude NL → { date, theme, speaker } filter parser
+│       └── transcriptFormat.ts    # Shared date/slug formatting helpers
 ├── tests/
 │   ├── setup.ts                   # Env vars for test context
 │   ├── db.test.ts                 # Storage layer (26 tests)
@@ -199,6 +210,8 @@ The `X-Admin-Secret` header is sent automatically using the password you type in
 ---
 
 ### For Church Members
+
+Open `http://localhost:3000/` to ask questions in the chat UI, or `http://localhost:3000/transcripts` to find and read sermon transcripts. The transcripts page accepts a natural-language request ("sermons in February 2023", "all sermons on faith", "the message on the 4th of July 2021") or structured month/year/theme/speaker filters, lists matches in a mobile-responsive table, and offers each transcript as a viewable page and an on-demand PDF download.
 
 Connect via any MCP-compatible client. See `mcpConnect.md` for full setup instructions.
 

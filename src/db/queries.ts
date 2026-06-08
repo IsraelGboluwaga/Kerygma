@@ -246,6 +246,39 @@ export function getSermonsByTheme(themeId: string): SermonRow[] {
     .all(themeId) as SermonRow[]
 }
 
+// Resolve a free-text theme term (e.g. "faith") to its sermons via a substring
+// match on the theme name — so "faith" still matches a "Faith Foundations" theme.
+export function getSermonsByThemeName(name: string): SermonRow[] {
+  return getDb()
+    .prepare(
+      `${SERMON_SELECT} WHERE t.name IS NOT NULL AND LOWER(t.name) LIKE LOWER(?)
+       AND s.ingestion_status = 'done' ORDER BY s.date DESC`
+    )
+    .all(`%${name}%`) as SermonRow[]
+}
+
+// Distinct sermons whose chunks match an FTS query, ranked by best chunk relevance.
+// Used as the keyword fallback when a theme term isn't a formal theme name.
+export function searchSermons(query: string, limit = 50): SermonRow[] {
+  return getDb()
+    .prepare(
+      `SELECT s.*, t.name AS theme
+       FROM sermons s
+       LEFT JOIN themes t ON t.id = s.theme_id
+       JOIN (
+         SELECT c.sermon_id AS sid, MIN(fts.rank) AS best_rank
+         FROM chunks_fts fts
+         JOIN chunks c ON c.id = fts.rowid
+         WHERE chunks_fts MATCH ?
+         GROUP BY c.sermon_id
+       ) m ON m.sid = s.id
+       WHERE s.ingestion_status = 'done'
+       ORDER BY m.best_rank
+       LIMIT ?`
+    )
+    .all(sanitizeFtsQuery(query), limit) as SermonRow[]
+}
+
 export function listThemes(): ThemeRow[] {
   return getDb().prepare(`SELECT * FROM themes ORDER BY name`).all() as ThemeRow[]
 }
