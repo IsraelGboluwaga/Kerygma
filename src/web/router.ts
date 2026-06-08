@@ -318,7 +318,9 @@ export function createRouter(anthropic: Anthropic): Hono {
         for (let step = 0; step < 6; step++) {
           const msgStream = anthropic.messages.stream({
             model: config.CLAUDE_MODEL,
-            max_tokens: 2048,
+            // Headroom for a full list_sermons roster (up to 100 rows) so a
+            // "complete list" answer isn't truncated at the output layer.
+            max_tokens: 3072,
             // One cache_control breakpoint on the system prompt caches the
             // tools+system prefix, so the follow-up call(s) in the loop read it
             // at ~0.1x instead of re-paying full input price.

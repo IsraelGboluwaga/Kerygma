@@ -68,7 +68,7 @@ Sources are emitted as they're discovered (after each tool call), not necessaril
 
 Claude is called with:
 - Model: `claude-sonnet-4-6` (configurable via `CLAUDE_MODEL`)
-- Max tokens: 2048 per turn
+- Max tokens: 3072 per turn (headroom for a full `list_sermons` roster)
 - The full conversation history (multi-turn support)
 - The system prompt (cached) + `CHAT_TOOLS`
 
@@ -108,7 +108,7 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 | Chunks per `search_sermon_excerpts` call | 10 | `router.ts` → `searchChunks(query, 10)` |
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
 | Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
-| Max tokens per Claude turn | 2048 | `router.ts` → `max_tokens: 2048` |
+| Max tokens per Claude turn | 3072 | `router.ts` → `max_tokens: 3072` |
 | Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
 
 Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because it groups results by sermon and presents them structured rather than as a synthesised narrative.
