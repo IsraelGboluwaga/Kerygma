@@ -271,7 +271,7 @@ What has Apostle Emmanuel Iren said about healing?
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chat synthesis |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
 | `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream R2 replication |
 | `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication |

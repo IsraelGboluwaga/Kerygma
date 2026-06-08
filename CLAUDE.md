@@ -58,7 +58,7 @@ Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md
 | `DB_PATH` | No | `./data/sermons.db` | SQLite path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap for ingested audio |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chat synthesis |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
 | `LOG_LEVEL` | No | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
 | `R2_ACCOUNT_ID` | No | — | Cloudflare account ID; required for Litestream R2 replication |

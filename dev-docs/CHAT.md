@@ -67,7 +67,7 @@ The backend emits these SSE event types:
 Sources are emitted as they're discovered (after each tool call), not necessarily before the first token — `timestamp` is present for excerpt citations and omitted for `list_sermons` rows.
 
 Claude is called with:
-- Model: `claude-sonnet-4-20250514` (configurable via `CLAUDE_MODEL`)
+- Model: `claude-sonnet-4-6` (configurable via `CLAUDE_MODEL`)
 - Max tokens: 2048 per turn
 - The full conversation history (multi-turn support)
 - The system prompt (cached) + `CHAT_TOOLS`
@@ -109,7 +109,7 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
 | Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
 | Max tokens per Claude turn | 2048 | `router.ts` → `max_tokens: 2048` |
-| Claude model | `claude-sonnet-4-20250514` (overridable) | `config.ts` → `CLAUDE_MODEL` |
+| Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
 
 Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because it groups results by sermon and presents them structured rather than as a synthesised narrative.
 
