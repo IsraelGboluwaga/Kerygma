@@ -47,6 +47,51 @@ export function validateChunks(chunks: ChunkCandidate[]): ChunkCandidate[] {
   return chunks
 }
 
+interface RawSection {
+  section_name: string
+  timestamp_start: number
+  timestamp_end: number
+  key_topics: string[]
+  summary: string
+}
+
+// Forcing the model to emit sections through a tool means the SDK hands us the
+// already-parsed `input` object — we never JSON.parse free-form model text. This
+// eliminates the two failure modes that previously broke ingestion: invalid
+// escape sequences inside string values (e.g. `\"here I am\"`) and markdown code
+// fences. Truncation is handled separately via `stop_reason` below.
+const CHUNKING_TOOL: Anthropic.Tool = {
+  name: 'emit_sections',
+  description: 'Record the logical sections the sermon transcript has been divided into.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      sections: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            section_name: {
+              type: 'string',
+              description: 'e.g. "Introduction", "Main Point 1: Walking by Faith", "Conclusion"',
+            },
+            timestamp_start: { type: 'number', description: 'Start time in seconds' },
+            timestamp_end: { type: 'number', description: 'End time in seconds' },
+            key_topics: {
+              type: 'array',
+              items: { type: 'string' },
+              description: '3-5 keywords for the section',
+            },
+            summary: { type: 'string', description: '1-2 sentence summary of the section' },
+          },
+          required: ['section_name', 'timestamp_start', 'timestamp_end', 'key_topics', 'summary'],
+        },
+      },
+    },
+    required: ['sections'],
+  },
+}
+
 export async function chunkSermon(
   segments: TranscriptSegment[],
   anthropic: Anthropic
@@ -55,27 +100,17 @@ export async function chunkSermon(
 
   const response = await withRetry(() => anthropic.messages.create({
     model: config.CHUNKING_MODEL,
-    max_tokens: 4096,
+    // Output is compact (section metadata only; section text is reconstructed
+    // locally from `segments`), but long sermons produce many sections. 4096 was
+    // too small and truncated the response, breaking ingestion — 16000 gives
+    // ample headroom while staying within the non-streaming HTTP-timeout range.
+    max_tokens: 16000,
+    tools: [CHUNKING_TOOL],
+    tool_choice: { type: 'tool', name: 'emit_sections' },
     messages: [
       {
         role: 'user',
-        content: `Analyze this sermon transcript and divide it into logical sections.
-For each section, identify:
-1. Section name (e.g., "Introduction", "Main Point 1: Walking by Faith", "Conclusion")
-2. Start and end timestamps (in seconds)
-3. Key topics discussed (3-5 keywords)
-4. Brief summary (1-2 sentences)
-
-Return ONLY a JSON array with this structure:
-[
-  {
-    "section_name": "Introduction",
-    "timestamp_start": 0.0,
-    "timestamp_end": 180.5,
-    "key_topics": ["welcome", "worship", "announcements"],
-    "summary": "Pastor welcomes congregation and makes announcements."
-  }
-]
+        content: `Analyze this sermon transcript and divide it into logical sections, then call the emit_sections tool with the result. For each section provide a name, start and end timestamps in seconds, 3-5 key topics, and a 1-2 sentence summary.
 
 Transcript:
 ${formatted}`,
@@ -83,25 +118,19 @@ ${formatted}`,
     ],
   }))
 
-  const firstBlock = response.content[0]
-  if (!firstBlock || firstBlock.type !== 'text') {
-    throw new Error(`Unexpected Claude response content type: ${firstBlock?.type ?? 'empty'}`)
-  }
-  let text = firstBlock.text
-
-  // Strip markdown code fences if present
-  if (text.startsWith('```')) {
-    text = text.split('\n').slice(1).join('\n')
-    text = text.split('```')[0]
+  // A forced tool call truncated by the token cap returns a partial, unusable
+  // `input`. Fail loudly so the sermon is recorded as missing and retried rather
+  // than silently saved with a clipped set of sections.
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error('Chunking response was truncated at max_tokens — transcript too long for one pass')
   }
 
-  const raw = JSON.parse(text) as Array<{
-    section_name: string
-    timestamp_start: number
-    timestamp_end: number
-    key_topics: string[]
-    summary: string
-  }>
+  const toolUse = response.content.find((b) => b.type === 'tool_use')
+  if (!toolUse || toolUse.type !== 'tool_use') {
+    throw new Error(`Expected a tool_use response from chunking model, got stop_reason=${response.stop_reason}`)
+  }
+
+  const raw = (toolUse.input as { sections?: RawSection[] }).sections ?? []
 
   const chunks: ChunkCandidate[] = raw.map((r) => ({
     section_name: r.section_name,
