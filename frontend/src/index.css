@@ -51,9 +51,6 @@
   --c-scrollbar: #c8c6c2;
 }
 
-/* White SVG logos need inverting in light mode. */
-[data-theme="light"] .logo-inv { filter: invert(1); }
-
 @layer base {
   html,
   body,
