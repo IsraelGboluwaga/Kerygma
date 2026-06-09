@@ -55,7 +55,16 @@
   html,
   body,
   #root {
-    @apply h-full;
+    /*
+     * `100%` alone is unreliable on iOS Safari: the dynamic toolbar makes the
+     * page taller than the visual viewport, so the whole body scrolls and a
+     * pinned bottom bar (e.g. the chat composer) drifts up out of view.
+     * `100dvh` tracks the *dynamic* viewport, keeping the layout exactly one
+     * screen tall so inner panes scroll instead of the page. `100%` stays as a
+     * fallback for browsers without `dvh` support.
+     */
+    height: 100%;
+    height: 100dvh;
   }
 
   body {
