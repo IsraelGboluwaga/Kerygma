@@ -15,6 +15,7 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 
 ### Features
 
+- **React + Vite SPA** — chat, transcripts, admin, live status, and DB browser as one mobile-responsive single-page app (Tailwind), installable as a **PWA** with an offline app shell
 - **Web admin UI** — paste an MP3 URL, submit, watch the job complete
 - **Whisper transcription** — local speech-to-text via nodejs-whisper
 - **Claude chunking** — sermon divided into named sections with timestamps, topics, and summaries

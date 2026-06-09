@@ -215,6 +215,8 @@ The entire member- and admin-facing UI is a single-page React app (TypeScript + 
 
 In dev, the Vite dev server (`:5173`) serves the SPA and proxies `/api`, `/assets`, `/health`, `/mcp`, and `/transcripts/*/download` to the Hono server (`:3000`). In production, `yarn build:web` emits the SPA to `public/app/` and Hono serves it.
 
+The app is an installable **PWA**: `vite-plugin-pwa` generates `sw.js` + `manifest.webmanifest` (served from `public/app` by the catch-all). The service worker precaches the app shell and runtime-caches only public read-only data (`/api/transcripts/*`, `/api/themes`, `/assets/*`); the live chat SSE (`/api/chat`) and secret-gated `/api/admin/*` and `/api/db/*` routes are deliberately network-only. Icons live in `public/assets/` (`pwa-192x192.png`, `pwa-512x512.png`, `maskable-512x512.png`).
+
 ### `src/web/transcriptPdf.ts`
 `generateTranscriptPdf(sermon, transcript)` renders a transcript to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser; sub-second even for a 2-hour sermon). `transcriptPdfFilename(sermon)` builds the `theme__title__month-year.pdf` download name (theme falls back to `sermon`).
 

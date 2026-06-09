@@ -126,6 +126,7 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - Styling is **Tailwind**, mobile-responsive, using the tokens in `frontend/tailwind.config.ts` (dark theme, `accent` red). Reuse `.btn-primary`/`.btn-ghost`/`.card`/`.field`/`.badge` component classes from `index.css` rather than re-deriving the look.
 - The admin secret stays in `sessionStorage` via `useAdminSecret` and is sent as `X-Admin-Secret` — never persist it elsewhere or send it in a URL.
 - Vite emits content-hashed assets under `/static`; the logo/icon files served from `public/assets` stay at `/assets`. Don't let Vite output collide with `/assets`.
+- The app is an installable **PWA** (`vite-plugin-pwa`, generated `sw.js` + `manifest.webmanifest`). The service worker precaches the app shell and runtime-caches only **public read-only** data (`/api/transcripts/*`, `/api/themes`, `/assets/*`). **Never add caching for `/api/chat` (live SSE) or any `/api/admin/*` / `/api/db/*` route** — they are live and/or secret-gated. Keep those out of `runtimeCaching` and in `navigateFallbackDenylist`. PWA icons live in `public/assets/` (`pwa-192x192`, `pwa-512x512`, maskable); regenerate them from `favicon.svg` with `sharp` if the mark changes.
 
 ### Chat
 - The chat (`POST /api/chat` in `src/web/router.ts`) is **agentic**: Claude is given read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`) and chooses the lookup. Do **not** revert to a single pre-baked `searchChunks` call stuffed into the prompt — that under-serves enumeration questions.
