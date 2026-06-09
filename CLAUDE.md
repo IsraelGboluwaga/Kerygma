@@ -18,14 +18,21 @@ The one exception: `npx nodejs-whisper download` is the upstream-prescribed way 
 ## Common commands
 
 ```bash
-yarn dev              # start dev server with tsx watch (hot reload)
-yarn build            # compile TypeScript → dist/
+yarn dev              # backend (tsx watch) + Vite dev server together — open http://localhost:5173
+yarn dev:server       # backend only (tsx watch src/main.ts)
+yarn dev:web          # Vite dev server only (:5173, proxies /api → :3000)
+yarn build            # build the React SPA (→ public/app) and the backend (→ dist)
+yarn build:web        # Vite build only
+yarn build:server     # esbuild backend only
 yarn start            # run compiled output
 yarn test             # run all tests once (vitest)
 yarn test:watch       # run tests in watch mode
 yarn test:coverage    # run tests with v8 coverage report
-yarn typecheck        # type-check without emitting (tsc --noEmit)
+yarn typecheck        # type-check the backend (tsc --noEmit)
+yarn typecheck:web    # type-check the frontend (tsc --noEmit)
 ```
+
+The frontend lives in `frontend/` as a yarn **workspace** — a single `yarn install` at the repo root installs both backend and frontend deps.
 
 ---
 
@@ -33,13 +40,14 @@ yarn typecheck        # type-check without emitting (tsc --noEmit)
 
 Kerygma is a TypeScript/Node.js church sermon knowledge base.
 
-- **Single process, single port (3000)** — Hono handles chat + admin routes; a raw `http.createServer` wrapper splits `/mcp` to the MCP server
+- **Single process, single port (3000)** — Hono serves `/api/*` JSON+SSE and the built React SPA; a raw `http.createServer` wrapper splits `/mcp` to the MCP server
+- **React + Vite frontend** — a TypeScript/Tailwind SPA in `frontend/` (chat, transcripts, admin, live status, DB browser); built to `public/app` and served by Hono
 - **Ingestion pipeline** — MP3 → Whisper (transcription) → Claude (semantic chunking) → embeddings → SQLite
 - **Chat UI** — members ask questions; FTS5 search retrieves relevant chunks; Claude synthesises an answer streamed via SSE
 - **MCP server** — 4 read-only tools for Claude Desktop / any MCP client
 - **In-process job queue** — FIFO, persisted to SQLite `jobs` table so history survives restarts
 
-Key source files: `src/main.ts`, `src/config.ts`, `src/web/router.ts`, `src/mcp/server.ts`, `src/ingestion/pipeline.ts`.
+Key source files: `src/main.ts`, `src/config.ts`, `src/web/router.ts`, `src/mcp/server.ts`, `src/ingestion/pipeline.ts`, `frontend/src/App.tsx`, `frontend/src/api/client.ts`.
 
 Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md`. MCP setup: `mcpConnect.md`.
 
@@ -111,17 +119,25 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - Speaker disambiguation and nearest-date fallback are required for any tool that accepts a speaker or date argument — reuse `resolveSpeaker` and `nearestDateMessage`.
 - Register tools through the loosely-typed `tool` boundary (`server.tool.bind(server) as unknown as RegisterTool`) in `createMcpServer`, not `server.tool` directly. The SDK's generic overload forces `tsc` to instantiate `ShapeOutput<Args>` over both bundled Zod v3/v4 type machineries, which exploded `yarn typecheck` to ~18M instantiations (~3.5 min). The boundary skips that inference; each handler keeps its own explicit `{ ... }` arg type and `Promise<CallToolResult>` return type. Do **not** reintroduce `@ts-expect-error` suppressions — they hide the error but `tsc` still does all the work.
 
+### Frontend (React + Vite)
+- The UI is a React SPA in `frontend/` (a yarn **workspace**), built by Vite to `public/app` and served by Hono's catch-all. The backend renders **no HTML** — it exposes JSON/SSE under `/api/*` plus the PDF download. Do not reintroduce server-rendered `*Html.ts` page modules.
+- **All data lives under `/api/*`.** When you add a backend endpoint the SPA consumes, prefix it `/api/` so it never collides with a client-side route caught by the SPA fallback. Keep `/transcripts/:id/download` (PDF) as the one non-`/api` data route, since the SPA links to it directly.
+- Keep the data-fetching in `frontend/src/api/client.ts` (typed wrappers + `streamChat` SSE reader) and its response shapes in `frontend/src/api/types.ts` **in sync with `src/web/router.ts`**. These are two hand-maintained copies of the same contract.
+- Styling is **Tailwind**, mobile-responsive, using the tokens in `frontend/tailwind.config.ts` (dark theme, `accent` red). Reuse `.btn-primary`/`.btn-ghost`/`.card`/`.field`/`.badge` component classes from `index.css` rather than re-deriving the look.
+- The admin secret stays in `sessionStorage` via `useAdminSecret` and is sent as `X-Admin-Secret` — never persist it elsewhere or send it in a URL.
+- Vite emits content-hashed assets under `/static`; the logo/icon files served from `public/assets` stay at `/assets`. Don't let Vite output collide with `/assets`.
+
 ### Chat
-- The chat (`POST /` in `src/web/router.ts`) is **agentic**: Claude is given read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`) and chooses the lookup. Do **not** revert to a single pre-baked `searchChunks` call stuffed into the prompt — that under-serves enumeration questions.
+- The chat (`POST /api/chat` in `src/web/router.ts`) is **agentic**: Claude is given read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`) and chooses the lookup. Do **not** revert to a single pre-baked `searchChunks` call stuffed into the prompt — that under-serves enumeration questions.
 - **Enumeration must use `list_sermons`, not excerpt search.** A top-N relevance search (`searchChunks`) returns a *sample* and silently drops sermons, so "what sermons were preached that month?" came back incomplete. `list_sermons` returns the **complete** roster for a date/topic/speaker filter via `resolveTranscriptSermons`. Keep the system-prompt instruction that forbids "these are only the excerpts I was given" disclaimers when answering from `list_sermons`.
 - Keep the single `cache_control` breakpoint on the chat system prompt: the tools+system prefix is byte-identical across the loop's calls, so it reads at ~0.1× input cost. Don't interpolate per-request values into that system prompt (it would break the cache).
 - The agentic loop is capped (`step < 6`). Keep a cap — an uncapped tool loop can run away.
-- Sources stream as `context` events *after* tools run (not before the answer), so the frontend `applySources()` must remain able to attach/refresh the `<details>` on an existing bubble.
+- Sources stream as `context` events *after* tools run (not before the answer), so the frontend `Sources` rendering must remain able to attach/refresh the `<details>` on an existing bubble.
 
 ### Transcripts page
 - Transcript text comes from the `transcriptions` table (`getTranscriptionBySermonId`) — the verbatim copy. Do not rebuild it from chunks.
 - PDFs are generated on demand with `pdfkit` (pure JS) in `src/web/transcriptPdf.ts`. Do **not** swap in a headless-browser renderer (Puppeteer/Playwright) — it would add a browser process and hundreds of MB of RAM to this single-process app.
-- `/transcripts/search` must be registered before `/transcripts/:videoId` so the static path isn't captured as a video id.
+- `/api/transcripts/search` must be registered before `/api/transcripts/:videoId` so the static path isn't captured as a video id.
 - The natural-language query parser (`parseTranscriptQuery`) uses `CHUNKING_MODEL` via `withRetry` and must degrade to `{}` (then a keyword fallback) rather than erroring.
 - A subject like "on faith" is a **topic** (relevance), not a formal **theme**. `searchSermonsByTopic` matches the term only in the Claude-derived `topics`/`summary` FTS columns and ranks by density (share of sections about it) — do not resolve a topic with a bare content keyword match, which for common words like "faith" matches nearly every sermon.
 

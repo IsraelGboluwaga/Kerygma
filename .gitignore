@@ -10,6 +10,7 @@ node_modules/nodejs-whisper/cpp/whisper.cpp/models/*.bin
 
 # Build output
 dist/
+public/app/
 
 # Database
 data/

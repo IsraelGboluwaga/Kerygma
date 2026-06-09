@@ -9,10 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Copy both the root and frontend manifests so the yarn workspace install
+# resolves backend + frontend deps in one cached layer.
 COPY package.json yarn.lock ./
+COPY frontend/package.json ./frontend/package.json
 RUN yarn install --frozen-lockfile
 
 COPY . .
+# Builds the React SPA (→ public/app) and the backend (→ dist).
 RUN yarn build
 
 

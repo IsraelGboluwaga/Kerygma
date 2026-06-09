@@ -35,22 +35,21 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 ## Architecture
 
 ```
-Browser (Admin)
-    │  POST /admin/ingest
+Browser → React SPA (public/app, client-side routes: /, /transcripts, /admin, …)
     ▼
 Hono HTTP Server (:3000)
-    ├── GET  /admin             → Admin form (password-gated)
-    ├── GET  /admin/status      → Live status dashboard
-    ├── POST /admin/ingest      → Enqueue job → 202 + jobId
-    ├── GET  /admin/jobs        → Recent job statuses
-    ├── GET  /admin/jobs/:id    → Poll single job
-    ├── GET  /admin/status/data → Live queue + phase snapshot
-    ├── GET  /                  → Chat UI
-    ├── GET  /transcripts       → Transcripts search + table
-    ├── GET  /transcripts/search          → Date/theme/keyword results (JSON)
-    ├── GET  /transcripts/:id             → Viewable transcript
+    ├── POST /api/chat                    → Agentic chat (SSE stream)
+    ├── GET  /api/themes                  → Theme list for filters (JSON)
+    ├── GET  /api/transcripts/search      → Date/theme/keyword results (JSON)
+    ├── GET  /api/transcripts/:id         → Viewable transcript (JSON)
     ├── GET  /transcripts/:id/download    → Transcript PDF
-    └── GET  /health            → { ok: true }
+    ├── GET  /api/admin/status            → Stats snapshot          (X-Admin-Secret)
+    ├── POST /api/admin/sync-api          → Trigger background sync (X-Admin-Secret)
+    ├── GET  /api/admin/jobs              → Recent job statuses     (X-Admin-Secret)
+    ├── GET  /api/admin/status/data       → Live queue + phase      (X-Admin-Secret)
+    ├── GET  /api/db/:table               → Paginated table rows    (X-Admin-Secret)
+    ├── GET  /health                      → { ok: true }
+    └── GET  *                            → SPA static files / index.html fallback
          │
     In-process job queue (sequential)
          │
@@ -93,15 +92,22 @@ kerygma/
 │   ├── mcp/
 │   │   └── server.ts              # 4 MCP tool registrations
 │   └── web/
-│       ├── router.ts              # Hono app — chat, admin, status, and health routes
-│       ├── adminHtml.ts           # Admin form HTML (password-gated, live job polling)
-│       ├── statusHtml.ts          # Live ingestion status dashboard (phase stepper + queue)
-│       ├── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
-│       ├── transcriptsHtml.ts     # Transcripts search page (NL + structured filters, responsive table)
-│       ├── transcriptViewHtml.ts  # Single viewable transcript (timestamped segments)
+│       ├── router.ts              # Hono app — /api/* JSON+SSE, PDF download, SPA serving
 │       ├── transcriptPdf.ts       # pdfkit PDF generator + filename builder
 │       ├── transcriptQuery.ts     # Claude NL → { date, theme, speaker } filter parser
 │       └── transcriptFormat.ts    # Shared date/slug formatting helpers
+├── frontend/                      # React + Vite SPA (TypeScript + Tailwind)
+│   ├── vite.config.ts             # Build → ../public/app; dev proxy → :3000
+│   ├── tailwind.config.ts         # Design tokens (dark theme, red accent)
+│   └── src/
+│       ├── App.tsx                # react-router routes for all pages
+│       ├── api/                   # Typed fetch client + SSE chat reader + response types
+│       ├── components/            # Shared TopBar, Badge
+│       ├── lib/                   # Formatting + useAdminSecret (sessionStorage)
+│       └── pages/                 # Chat, Transcripts, TranscriptView, Admin, LiveStatus, DbBrowser
+├── public/
+│   ├── assets/                    # Logos/icons served at /assets
+│   └── app/                       # Vite build output (gitignored, created by yarn build:web)
 ├── tests/
 │   ├── setup.ts                   # Env vars for test context
 │   ├── db.test.ts                 # Storage layer (26 tests)
@@ -305,16 +311,21 @@ missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, 
 ## Development
 
 ```bash
-yarn dev            # run with tsx watch (needs cmake + ffmpeg + whisper model on host)
-yarn build          # esbuild → dist/ (fast transpile, no type check)
-yarn typecheck      # tsc --noEmit (full type check)
+yarn dev            # run backend (tsx watch) + Vite dev server together (concurrently)
+yarn dev:server     # backend only (tsx watch src/main.ts)
+yarn dev:web        # Vite dev server only (:5173, proxies /api to :3000)
+yarn build          # build the SPA (→ public/app) and the backend (→ dist)
+yarn build:web      # Vite build only
+yarn build:server   # esbuild backend only (fast transpile, no type check)
+yarn typecheck      # tsc --noEmit (backend)
+yarn typecheck:web  # tsc --noEmit (frontend)
 yarn start          # node dist/main.js
-yarn test           # vitest run — 60 tests
+yarn test           # vitest run
 yarn test:watch     # vitest in watch mode
 yarn test:coverage  # vitest with v8 coverage report
 ```
 
-For iterating on code without rebuilding the full Docker image, `yarn dev` is faster — but you need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`).
+`yarn dev` runs the frontend on `http://localhost:5173` (which proxies API calls to the backend on `:3000`) — open that URL while developing. For the backend you still need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`). The React frontend lives in `frontend/` as a yarn workspace, so a single `yarn install` at the repo root installs everything.
 
 ---
 
@@ -347,10 +358,10 @@ Docker layer order is optimised so code-only changes are fast:
 
 ```
 apt-get install build-essential...  ← cached forever
-COPY package.json yarn.lock         ← cached until deps change
-RUN yarn install                    ← cached until yarn.lock changes (compiles better-sqlite3)
+COPY package.json yarn.lock + frontend/package.json  ← workspace manifests
+RUN yarn install                    ← cached until a manifest changes (compiles better-sqlite3)
 COPY . .                            ← invalidated on every code change
-RUN yarn build                      ← only this re-runs for code changes (~seconds)
+RUN yarn build                      ← Vite SPA + esbuild backend (~seconds)
 ```
 
 ---

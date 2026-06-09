@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { stream } from 'hono/streaming'
 import type Anthropic from '@anthropic-ai/sdk'
-import { readFileSync } from 'fs'
-import { join, extname } from 'path'
+import { readFileSync, existsSync, statSync } from 'fs'
+import { join, extname, normalize } from 'path'
 import { fileURLToPath } from 'url'
 import { config } from '../config.js'
 import { getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
@@ -25,18 +25,16 @@ import type { TranscriptSegment } from '../ingestion/transcriber.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
-import { adminHtml } from './adminHtml.js'
-import { statusHtml } from './statusHtml.js'
-import { dbHtml } from './dbHtml.js'
-import { chatHtml } from './chatHtml.js'
-import { transcriptsHtml } from './transcriptsHtml.js'
-import { transcriptViewHtml } from './transcriptViewHtml.js'
 import { generateTranscriptPdf, transcriptPdfFilename } from './transcriptPdf.js'
 import { parseTranscriptQuery, type TranscriptQuery } from './transcriptQuery.js'
 import { formatSermonDate, humanizeDatePrefix } from './transcriptFormat.js'
 import { getDb } from '../db/connection.js'
 
-const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
+const PUBLIC_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public')
+const ASSETS_DIR = join(PUBLIC_DIR, 'assets')
+// The Vite-built React SPA. Hono serves its files and falls back to index.html
+// for client-side routes (see the catch-all at the end of createRouter).
+const SPA_DIR = join(PUBLIC_DIR, 'app')
 
 const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml',
@@ -45,7 +43,17 @@ const MIME: Record<string, string> = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
 }
+
+const mimeFor = (file: string): string => MIME[extname(file)] ?? 'application/octet-stream'
 
 // Simple in-memory rate limiter: 30 requests/min per IP on the chat endpoint
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
@@ -245,8 +253,7 @@ export function createRouter(anthropic: Anthropic): Hono {
     const file = c.req.param('file')
     try {
       const data = readFileSync(join(ASSETS_DIR, file))
-      const mime = MIME[extname(file)] ?? 'application/octet-stream'
-      return new Response(data, { headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=86400' } })
+      return new Response(data, { headers: { 'Content-Type': mimeFor(file), 'Cache-Control': 'public, max-age=86400' } })
     } catch {
       return c.notFound()
     }
@@ -256,9 +263,7 @@ export function createRouter(anthropic: Anthropic): Hono {
   app.get('/health', (c) => c.json({ ok: true }))
 
   // ── Chat ───────────────────────────────────────────────────────────────
-  app.get('/', (c) => c.html(chatHtml()))
-
-  app.post('/', async (c) => {
+  app.post('/api/chat', async (c) => {
     const ip = c.req.header('x-forwarded-for') ?? c.req.header('x-real-ip') ?? 'unknown'
     if (!checkRateLimit(ip)) {
       return c.json({ error: 'Too many requests' }, 429)
@@ -364,12 +369,13 @@ export function createRouter(anthropic: Anthropic): Hono {
   })
 
   // ── Transcripts ─────────────────────────────────────────────────────────
-  // Page shell + theme list for the structured filter dropdown.
-  app.get('/transcripts', (c) => c.html(transcriptsHtml(listThemes())))
+  // Theme list for the structured filter dropdown in the SPA.
+  app.get('/api/themes', (c) =>
+    c.json(listThemes().map((t) => ({ id: t.id, name: t.name })))
+  )
 
   // Search endpoint — `q` (natural language) OR structured month/year/theme/speaker.
-  // Registered before /transcripts/:videoId so "search" isn't read as a video id.
-  app.get('/transcripts/search', async (c) => {
+  app.get('/api/transcripts/search', async (c) => {
     const q = c.req.query('q')?.trim()
     let filters: TranscriptQuery
     let sermons: SermonRow[]
@@ -400,8 +406,9 @@ export function createRouter(anthropic: Anthropic): Hono {
     })
   })
 
-  // Viewable transcript (rendered from stored segments / verbatim text).
-  app.get('/transcripts/:videoId', (c) => {
+  // Viewable transcript as JSON — the SPA renders it from stored segments
+  // (or splits the verbatim text into paragraphs when segments are absent).
+  app.get('/api/transcripts/:videoId', (c) => {
     const sermon = getSermonByVideoId(c.req.param('videoId'))
     if (!sermon || sermon.ingestion_status !== 'done') return c.notFound()
 
@@ -414,7 +421,19 @@ export function createRouter(anthropic: Anthropic): Hono {
         segments = []
       }
     }
-    return c.html(transcriptViewHtml(sermon, segments, row?.transcript ?? ''))
+    return c.json({
+      sermon: {
+        videoId: sermon.video_id,
+        title: sermon.title,
+        date: sermon.date,
+        dateFormatted: formatSermonDate(sermon.date),
+        speaker: sermon.speaker,
+        theme: sermon.theme,
+      },
+      segments,
+      transcript: row?.transcript ?? '',
+      hasTranscript: row !== null,
+    })
   })
 
   // On-demand PDF of the transcript — generated per request with pdfkit.
@@ -453,24 +472,17 @@ export function createRouter(anthropic: Anthropic): Hono {
     await next()
   }
 
-  // ── Admin UI ───────────────────────────────────────────────────────────
-  app.get('/admin', (c) => {
-    return c.html(adminHtml())
-  })
+  // All admin + DB data endpoints sit under protected prefixes. The admin/live
+  // and /lyrical-theology *pages* are now client-side routes served by the SPA
+  // catch-all; only their data APIs are guarded here.
+  app.use('/api/admin/*', adminMiddleware)
+  app.use('/api/db/*', adminMiddleware)
 
-  // Live phase/queue dashboard — public HTML, data endpoint is protected
-  app.get('/admin/live', (c) => c.html(statusHtml()))
-
-  app.use('/admin/jobs', adminMiddleware)
-  app.use('/admin/status', adminMiddleware)
-  app.use('/admin/status/data', adminMiddleware)
-  app.use('/admin/sync-api', adminMiddleware)
-
-  app.get('/admin/jobs', (c) => {
+  app.get('/api/admin/jobs', (c) => {
     return c.json(getRecentJobs(50))
   })
 
-  app.get('/admin/status', (c) => {
+  app.get('/api/admin/status', (c) => {
     return c.json({
       queueDepth: getQueueDepth(),
       lastSyncAt: getConfig('last_sync_at'),
@@ -478,19 +490,24 @@ export function createRouter(anthropic: Anthropic): Hono {
     })
   })
 
-  app.post('/admin/sync-api', async (c) => {
+  app.post('/api/admin/sync-api', async (c) => {
     void syncFromApi(anthropic)
     return c.json({ ok: true, message: 'API sync started in background' }, 202)
   })
 
-  // ── DB Browser UI + data API ───────────────────────────────────────────
+  // Snapshot for the live status dashboard: recent jobs (queued ones carry
+  // their 1-based queue position) plus current queue depth.
+  app.get('/api/admin/status/data', (c) => {
+    const jobs = getRecentJobs(50).map((job) =>
+      job.status === 'queued' ? { ...job, position: getQueuePosition(job.id) } : job
+    )
+    return c.json({ queueDepth: getQueueDepth(), jobs })
+  })
+
+  // ── DB Browser data API ─────────────────────────────────────────────────
   const DB_TABLES = new Set(['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons'])
 
-  app.get('/lyrical-theology', (c) => c.html(dbHtml()))
-
-  app.use('/lyrical-theology/:table', adminMiddleware)
-
-  app.get('/lyrical-theology/:table', (c) => {
+  app.get('/api/db/:table', (c) => {
     const table = c.req.param('table')
     if (!DB_TABLES.has(table)) {
       return c.json({ error: 'Unknown table' }, 400)
@@ -518,13 +535,35 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.json({ columns, rows, total: count, limit, offset })
   })
 
-  // Snapshot for the live status dashboard: recent jobs (queued ones carry
-  // their 1-based queue position) plus current queue depth.
-  app.get('/admin/status/data', (c) => {
-    const jobs = getRecentJobs(50).map((job) =>
-      job.status === 'queued' ? { ...job, position: getQueuePosition(job.id) } : job
-    )
-    return c.json({ queueDepth: getQueueDepth(), jobs })
+  // ── SPA (Vite build) ─────────────────────────────────────────────────────
+  // Serve built static files; fall back to index.html for any non-API GET so
+  // client-side routes (/admin, /transcripts/:id, …) resolve. Registered last
+  // so it never shadows the API or asset routes above.
+  const indexHtmlPath = join(SPA_DIR, 'index.html')
+
+  app.get('*', (c) => {
+    const urlPath = decodeURIComponent(new URL(c.req.url).pathname)
+
+    // Resolve to a file inside SPA_DIR, guarding against path traversal.
+    const candidate = normalize(join(SPA_DIR, urlPath))
+    if (candidate.startsWith(SPA_DIR) && existsSync(candidate) && statSync(candidate).isFile()) {
+      // Vite emits content-hashed files under /static — safe to cache forever.
+      const isHashed = candidate.startsWith(join(SPA_DIR, 'static'))
+      const cache = isHashed ? 'public, max-age=31536000, immutable' : 'no-cache'
+      return new Response(readFileSync(candidate), {
+        headers: { 'Content-Type': mimeFor(candidate), 'Cache-Control': cache },
+      })
+    }
+
+    if (existsSync(indexHtmlPath)) {
+      return new Response(readFileSync(indexHtmlPath), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' },
+      })
+    }
+
+    // Build not present (e.g. running the backend alone in dev — use the Vite
+    // dev server on :5173 instead).
+    return c.text('Frontend build not found. Run `yarn build:web` or use the Vite dev server.', 404)
   })
 
   return app
