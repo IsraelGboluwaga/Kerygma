@@ -5,12 +5,17 @@ import { upsertJob, getJobRow, listRecentJobRows, type JobRow } from './db/queri
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
 
+/** Sub-steps of a running ingestion job, surfaced for live transparency. */
+export type JobPhase = 'downloading' | 'transcribing' | 'chunking' | 'embedding'
+
 export interface Job {
   id: string
   title?: string
   downloadUrl?: string
   payload?: string
   status: JobStatus
+  /** Current sub-step while status is 'running'; cleared on terminal states. */
+  phase?: JobPhase
   message?: string
   createdAt: Date
   startedAt?: Date
@@ -18,7 +23,12 @@ export interface Job {
   error?: string
 }
 
-type JobFn = () => Promise<unknown>
+/** Passed to each job fn so it can report progress without owning job state. */
+export interface JobContext {
+  setPhase(phase: JobPhase): void
+}
+
+type JobFn = (ctx: JobContext) => Promise<unknown>
 
 const jobs = new Map<string, Job>()
 const fns = new Map<string, JobFn>() // job id → async fn (in-memory only)
@@ -33,6 +43,7 @@ function persist(job: Job): void {
       download_url: job.downloadUrl,
       payload: job.payload,
       status: job.status,
+      phase: job.phase,
       message: job.message,
       error: job.error,
       createdAt: job.createdAt,
@@ -52,6 +63,7 @@ function rowToJob(row: JobRow): Job {
     downloadUrl: row.download_url ?? undefined,
     payload: row.payload ?? undefined,
     status: row.status as JobStatus,
+    phase: (row.phase as JobPhase | null) ?? undefined,
     message: row.message ?? undefined,
     error: row.error ?? undefined,
     createdAt: new Date(row.created_at),
@@ -95,8 +107,18 @@ async function drain(): Promise<void> {
     persist(job)
     logger.info(`Job ${id} started`)
 
+    const ctx: JobContext = {
+      setPhase(phase: JobPhase): void {
+        // Ignore stray late calls once the job is no longer running
+        if (job.status !== 'running') return
+        job.phase = phase
+        persist(job)
+        logger.debug(`Job ${id} → ${phase}`)
+      },
+    }
+
     try {
-      const result = await fn()
+      const result = await fn(ctx)
       // If the pipeline returned a structured failure, surface it as failed
       if (
         result !== null &&
@@ -121,6 +143,7 @@ async function drain(): Promise<void> {
       logger.error(`Job ${id} failed: ${job.error}`)
     } finally {
       job.completedAt = new Date()
+      job.phase = undefined // terminal state — status carries the meaning now
       persist(job)
     }
   }
@@ -158,6 +181,15 @@ export function getRecentJobs(limit = 50): Job[] {
 
 export function getQueueDepth(): number {
   return queue.length
+}
+
+/**
+ * 1-based position of a queued job in line (1 = next to run), or null if the
+ * job is not currently waiting in the queue (running/done/failed/unknown).
+ */
+export function getQueuePosition(id: string): number | null {
+  const idx = queue.indexOf(id)
+  return idx === -1 ? null : idx + 1
 }
 
 /** Resolves once no job is actively running. Used for graceful shutdown. */

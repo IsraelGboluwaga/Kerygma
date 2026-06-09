@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
@@ -17,19 +18,22 @@ import { formatTimestamp } from '../ingestion/chunker.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+const CHUNK_CONTENT_CAP = 800
+
 function buildContext(
   results: Array<{
     sermon_title: string
     date: string
     timestamp_start: number
     content: string
+    webpage_url?: string | null
   }>
 ): string {
   return results
-    .map(
-      (r) =>
-        `[${r.sermon_title} | ${r.date} | ${formatTimestamp(r.timestamp_start)}]\n${r.content}`
-    )
+    .map((r) => {
+      const header = `[${r.sermon_title} | ${r.date} | ${formatTimestamp(r.timestamp_start)}${r.webpage_url ? ` | Watch: ${r.webpage_url}` : ''}]`
+      return `${header}\n${r.content.slice(0, CHUNK_CONTENT_CAP)}`
+    })
     .join('\n\n')
 }
 
@@ -50,6 +54,17 @@ function resolveSpeaker(filter: string): SpeakerResolution {
     }
   }
   return { ok: true, name: matches[0] }
+}
+
+type SpeakerFilterResult =
+  | { ok: true; name: string | undefined }
+  | { ok: false; response: { content: [{ type: 'text'; text: string }] } }
+
+function resolveSpeakerFilter(filter: string | undefined): SpeakerFilterResult {
+  if (!filter) return { ok: true, name: undefined }
+  const resolution = resolveSpeaker(filter)
+  if (!resolution.ok) return { ok: false, response: { content: [{ type: 'text', text: resolution.message }] } }
+  return { ok: true, name: resolution.name }
 }
 
 function nearestDateMessage(date: string): string {
@@ -91,7 +106,7 @@ function fetchChunksByDateAndSpeaker(
     ok: true,
     chunks: chunks.map((c) => {
       const s = sermonMap.get(c.sermon_id)!
-      return { ...c, sermon_title: s.title, date: s.date, download_url: s.download_url, webpage_url: s.webpage_url, speaker: s.speaker, series: s.series ?? null }
+      return { ...c, sermon_title: s.title, date: s.date, download_url: s.download_url, webpage_url: s.webpage_url, speaker: s.speaker, theme: s.theme ?? null }
     }),
   }
 }
@@ -104,13 +119,26 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
     version: '1.0.0',
   })
 
+  // The SDK's generic `server.tool(name, desc, shape, cb)` overload forces
+  // `tsc` to compute `ShapeOutput<Args>` over each Zod field, evaluating both
+  // the bundled v3 and v4 type machinery. With our four tools that ballooned
+  // to ~18M type instantiations and made `yarn typecheck` take ~3.5 minutes.
+  // Registering through a loosely-typed boundary skips that inference entirely
+  // while each handler keeps its own explicit arg/return types below.
+  type RegisterTool = <Args>(
+    name: string,
+    description: string,
+    schema: z.ZodRawShape,
+    handler: (args: Args) => CallToolResult | Promise<CallToolResult>
+  ) => void
+  const tool = server.tool.bind(server) as unknown as RegisterTool
+
   // ── Tool 1: list_sermons ───────────────────────────────────────────────
-  server.tool(
+  tool(
     'list_sermons',
     'List recently indexed sermons.',
     { limit: z.number().int().positive().default(20).describe('Max sermons to return') },
-    // @ts-expect-error — TS2589: handler return type inference too deep
-    async ({ limit }: { limit: number }) => {
+    async ({ limit }: { limit: number }): Promise<CallToolResult> => {
       const rows = listSermons(limit)
 
       if (rows.length === 0) {
@@ -127,7 +155,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
       const text = rows
         .map(
           (r) =>
-            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}${r.series ? `\n  Series: ${r.series}` : ''}${r.webpage_url ? `\n  URL: ${r.webpage_url}` : ''}`
+            `• ${r.title}\n  Date: ${r.date}\n  Speaker: ${r.speaker ?? 'Unknown'}${r.theme ? `\n  Theme: ${r.theme}` : ''}${r.webpage_url ? `\n  Watch: ${r.webpage_url}` : ''}`
         )
         .join('\n\n')
 
@@ -136,7 +164,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
   )
 
   // ── Tool 2: ask_church ─────────────────────────────────────────────────
-  server.tool(
+  tool(
     'ask_church',
     'Answer a specific question using teachings from indexed sermons. Supports filtering by date and/or speaker.',
     {
@@ -150,16 +178,10 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
         .optional()
         .describe('Optional speaker name or partial name to filter by'),
     },
-    // @ts-expect-error — TS2589: handler return type inference too deep
-    async ({ question, date_filter, speaker_filter }: { question: string; date_filter?: string; speaker_filter?: string }) => {
-      let resolvedSpeaker: string | undefined
-      if (speaker_filter) {
-        const resolution = resolveSpeaker(speaker_filter)
-        if (!resolution.ok) {
-          return { content: [{ type: 'text', text: resolution.message }] }
-        }
-        resolvedSpeaker = resolution.name
-      }
+    async ({ question, date_filter, speaker_filter }: { question: string; date_filter?: string; speaker_filter?: string }): Promise<CallToolResult> => {
+      const sf = resolveSpeakerFilter(speaker_filter)
+      if (!sf.ok) return sf.response
+      const resolvedSpeaker = sf.name
 
       let results: ChunkWithSermon[]
 
@@ -198,7 +220,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
 
 ${context}
 
-Provide a clear answer with citations. For each citation, include the sermon title, date, and timestamp.
+Provide a clear answer with citations. For each citation, include the sermon title, date, and timestamp. If a YouTube link is available for a cited sermon, include it so the user can watch it directly.
 If the excerpts don't contain enough information to answer, say so.`,
             },
           ],
@@ -212,9 +234,9 @@ If the excerpts don't contain enough information to answer, say so.`,
   )
 
   // ── Tool 3: summarise_sermon ───────────────────────────────────────────
-  server.tool(
+  tool(
     'summarise_sermon',
-    'Get a full summary of what was preached on a given date. Optionally filter by speaker.',
+    'Get a summary of what was preached on a given date. IMPORTANT: Before calling this tool, ask the user whether they want a "brief" summary (key points only, faster) or a "comprehensive" summary (full breakdown with all themes, scripture references, and timestamps). Then pass their answer as summary_type.',
     {
       date: z
         .string()
@@ -223,38 +245,54 @@ If the excerpts don't contain enough information to answer, say so.`,
         .string()
         .optional()
         .describe('Optional speaker name or partial name'),
+      summary_type: z
+        .enum(['brief', 'comprehensive'])
+        .describe('Type of summary: "brief" (3-5 key points) or "comprehensive" (full breakdown)'),
     },
-    async ({ date, speaker }: { date: string; speaker?: string }) => {
-      let resolvedSpeaker: string | undefined
-      if (speaker) {
-        const resolution = resolveSpeaker(speaker)
-        if (!resolution.ok) {
-          return { content: [{ type: 'text', text: resolution.message }] }
-        }
-        resolvedSpeaker = resolution.name
-      }
+    async ({ date, speaker, summary_type }: { date: string; speaker?: string; summary_type: 'brief' | 'comprehensive' }): Promise<CallToolResult> => {
+      const sf = resolveSpeakerFilter(speaker)
+      if (!sf.ok) return sf.response
+      const resolvedSpeaker = sf.name
 
       const dateResult = fetchChunksByDateAndSpeaker(date, resolvedSpeaker)
       if (!dateResult.ok) return dateResult
 
-      const context = buildContext(dateResult.chunks)
+      const allChunks = dateResult.chunks
+      const sermon = allChunks[0]
+      const youtubeLink = sermon?.webpage_url ? `\nWatch: ${sermon.webpage_url}` : ''
+
+      // Rank chunks by summary length as a proxy for content density
+      const ranked = [...allChunks].sort(
+        (a, b) => (b.summary?.length ?? 0) - (a.summary?.length ?? 0)
+      )
+
+      const chunks = summary_type === 'brief' ? ranked.slice(0, 8) : ranked.slice(0, 20)
+
+      // Re-sort selected chunks chronologically for coherent context
+      chunks.sort((a, b) => a.timestamp_start - b.timestamp_start)
+
+      const context = buildContext(chunks)
+
+      const isBrief = summary_type === 'brief'
+      const instruction = isBrief
+        ? 'Provide a concise summary of 3-5 key points from this sermon. Be brief and direct.'
+        : 'Provide a comprehensive summary including main themes, key points, scripture references, and timestamps.'
 
       logger.info(
-        `summarise_sermon: synthesising for ${date}${resolvedSpeaker ? ` by ${resolvedSpeaker}` : ''}`
+        `summarise_sermon: ${summary_type} summary for ${date}${resolvedSpeaker ? ` by ${resolvedSpeaker}` : ''}`
       )
       const response = await withRetry(() =>
         anthropic.messages.create({
           model: config.CLAUDE_MODEL,
-          max_tokens: 2048,
+          max_tokens: isBrief ? 1024 : 4096,
           messages: [
             {
               role: 'user',
-              content: `You are a helpful assistant for ${config.MINISTRY_NAME}. Based on the following sermon excerpts, provide a comprehensive summary of what was preached.
+              content: `You are a helpful assistant for ${config.MINISTRY_NAME}. Based on the following sermon excerpts, ${instruction}
 
 ${context}
 
-Include the main themes, key points, and scripture references if mentioned.
-Cite the sermon title, date, and relevant timestamps.`,
+Cite the sermon title, date, and relevant timestamps where appropriate.${youtubeLink ? `\n\nInclude this link for the full sermon: ${youtubeLink}` : ''}`,
             },
           ],
         })
@@ -267,7 +305,7 @@ Cite the sermon title, date, and relevant timestamps.`,
   )
 
   // ── Tool 4: search_teachings ───────────────────────────────────────────
-  server.tool(
+  tool(
     'search_teachings',
     'Search for teachings on a specific topic across all sermons.',
     {
@@ -277,15 +315,10 @@ Cite the sermon title, date, and relevant timestamps.`,
         .optional()
         .describe('Optional speaker name to filter by'),
     },
-    async ({ topic, speaker_filter }: { topic: string; speaker_filter?: string }) => {
-      let resolvedSpeaker: string | undefined
-      if (speaker_filter) {
-        const resolution = resolveSpeaker(speaker_filter)
-        if (!resolution.ok) {
-          return { content: [{ type: 'text', text: resolution.message }] }
-        }
-        resolvedSpeaker = resolution.name
-      }
+    async ({ topic, speaker_filter }: { topic: string; speaker_filter?: string }): Promise<CallToolResult> => {
+      const sf = resolveSpeakerFilter(speaker_filter)
+      if (!sf.ok) return sf.response
+      const resolvedSpeaker = sf.name
 
       let results = searchChunks(topic, 20)
 
@@ -320,8 +353,8 @@ Cite the sermon title, date, and relevant timestamps.`,
             `Sermon: ${sermonTitle}\n` +
             `Date: ${first.date}\n` +
             `Speaker: ${first.speaker ?? 'Unknown'}\n` +
-            (first.series ? `Series: ${first.series}\n` : '') +
-            (first.webpage_url ? `URL: ${first.webpage_url}\n` : '') +
+            (first.theme ? `Theme: ${first.theme}\n` : '') +
+            (first.webpage_url ? `Watch: ${first.webpage_url}\n` : '') +
             `Relevant sections:\n${sections}`
           )
         })

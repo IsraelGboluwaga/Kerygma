@@ -24,6 +24,22 @@ function sanitizeFtsQuery(query: string): string {
   return tokens.length > 0 ? tokens.join(' OR ') : '""'
 }
 
+// Build an FTS query that matches a subject only in the Claude-derived `topics`
+// and `summary` columns (not raw `content`). A term appearing there means the
+// section is *about* that subject — not just mentioning the word in passing,
+// which for a common word like "faith" would otherwise match almost everything.
+// Multiple tokens are ANDed for precision (e.g. "spiritual growth").
+function topicMatchQuery(term: string): string | null {
+  const tokens = term
+    .replace(/['"*()\^~\-]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((t) => !STOPWORDS.has(t.toLowerCase()))
+    .map((t) => `"${t}"`)
+  if (tokens.length === 0) return null
+  return `{topics summary} : (${tokens.join(' AND ')})`
+}
+
 export interface SermonRow {
   id: number
   video_id: string
@@ -34,9 +50,34 @@ export interface SermonRow {
   speaker: string | null
   duration: number | null
   tags: string | null
-  series: string | null
+  excerpt: string | null
+  theme_id: number | null
+  theme: string | null  // joined theme name (themes.name), null when no theme
+  description: string | null
   ingestion_status: string
   transcription: string | null
+  created_at: string
+}
+
+export interface ThemeRow {
+  id: number
+  theme_id: string  // upstream API _id — stable across name changes
+  name: string
+  slug: string | null
+  created_at: string
+}
+
+export interface ThemeInput {
+  themeId: string   // upstream API _id
+  name: string
+  slug?: string
+}
+
+export interface TranscriptionRow {
+  id: number
+  sermon_id: number
+  transcript: string
+  segments: string  // JSON-encoded TranscriptSegment[]
   created_at: string
 }
 
@@ -58,7 +99,7 @@ export interface ChunkWithSermon extends ChunkRow {
   download_url: string
   webpage_url: string | null
   speaker: string | null
-  series: string | null
+  theme: string | null
 }
 
 export interface SaveSermonInput {
@@ -70,12 +111,13 @@ export interface SaveSermonInput {
   speaker?: string
   duration?: number
   tags?: string[]
-  series?: string
+  excerpt?: string
+  theme?: ThemeInput
+  description?: string
 }
 
 export interface InsertPartialSermonInput extends SaveSermonInput {
-  duration: number          // required — known after transcription
-  transcription: string     // JSON-encoded TranscriptSegment[]
+  duration: number  // required — known after transcription
 }
 
 export interface SaveChunkInput {
@@ -88,11 +130,32 @@ export interface SaveChunkInput {
   embedding?: Buffer
 }
 
-export function saveSermon(data: SaveSermonInput): number {
+/**
+ * Insert a theme (or update its name/slug if the upstream id is already known)
+ * and return its local primary key. Keyed on the upstream `theme_id` so the
+ * mapping survives theme renames.
+ */
+export function upsertTheme(theme: ThemeInput): number {
+  const database = getDb()
+  database
+    .prepare(
+      `INSERT INTO themes (theme_id, name, slug)
+       VALUES (@theme_id, @name, @slug)
+       ON CONFLICT(theme_id) DO UPDATE SET name = excluded.name, slug = excluded.slug`
+    )
+    .run({ theme_id: theme.themeId, name: theme.name, slug: theme.slug ?? null })
+  const row = database
+    .prepare(`SELECT id FROM themes WHERE theme_id = ?`)
+    .get(theme.themeId) as { id: number }
+  return row.id
+}
+
+function insertSermonRow(data: SaveSermonInput, status: 'done' | 'transcribed'): number {
+  const themeId = data.theme ? upsertTheme(data.theme) : null
   const result = getDb()
     .prepare(
-      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, ingestion_status)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, 'done')`
+      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, excerpt, theme_id, description, ingestion_status)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @excerpt, @theme_id, @description, @status)`
     )
     .run({
       video_id: data.video_id,
@@ -103,38 +166,47 @@ export function saveSermon(data: SaveSermonInput): number {
       speaker: data.speaker ?? null,
       duration: data.duration ?? null,
       tags: data.tags ? JSON.stringify(data.tags) : null,
-      series: data.series ?? null,
+      excerpt: data.excerpt ?? null,
+      theme_id: themeId,
+      description: data.description ?? null,
+      status,
     })
   return result.lastInsertRowid as number
 }
 
+export function saveSermon(data: SaveSermonInput): number {
+  return insertSermonRow(data, 'done')
+}
+
 export function insertPartialSermon(data: InsertPartialSermonInput): number {
-  const result = getDb()
-    .prepare(
-      `INSERT INTO sermons (video_id, title, date, download_url, webpage_url, speaker, duration, tags, series, ingestion_status, transcription)
-       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @duration, @tags, @series, 'transcribed', @transcription)`
-    )
-    .run({
-      video_id: data.video_id,
-      title: data.title,
-      date: data.date,
-      download_url: data.download_url,
-      webpage_url: data.webpage_url ?? null,
-      speaker: data.speaker ?? null,
-      duration: data.duration,
-      tags: data.tags ? JSON.stringify(data.tags) : null,
-      series: data.series ?? null,
-      transcription: data.transcription,
-    })
-  return result.lastInsertRowid as number
+  return insertSermonRow(data, 'transcribed')
 }
 
 export function completeSermon(id: number): void {
   getDb()
-    .prepare(
-      `UPDATE sermons SET ingestion_status = 'done', transcription = NULL WHERE id = ?`
-    )
+    .prepare(`UPDATE sermons SET ingestion_status = 'done' WHERE id = ?`)
     .run(id)
+}
+
+export function insertTranscription(
+  sermonId: number,
+  transcript: string,
+  segments: string
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO transcriptions (sermon_id, transcript, segments)
+       VALUES (?, ?, ?)`
+    )
+    .run(sermonId, transcript, segments)
+}
+
+export function getTranscriptionBySermonId(sermonId: number): TranscriptionRow | null {
+  return (
+    (getDb()
+      .prepare(`SELECT * FROM transcriptions WHERE sermon_id = ?`)
+      .get(sermonId) as TranscriptionRow | undefined) ?? null
+  )
 }
 
 export function saveChunks(sermonId: number, chunks: SaveChunkInput[]): void {
@@ -164,18 +236,96 @@ export function saveChunks(sermonId: number, chunks: SaveChunkInput[]): void {
   insertMany(chunks)
 }
 
+// Base SELECT for sermon rows — LEFT JOINs the theme name so callers get a
+// human-readable `theme` alongside the raw `theme_id` FK.
+const SERMON_SELECT = `SELECT s.*, t.name AS theme FROM sermons s LEFT JOIN themes t ON t.id = s.theme_id`
+
 export function getSermonByVideoId(videoId: string): SermonRow | null {
   return (
     (getDb()
-      .prepare(`SELECT * FROM sermons WHERE video_id = ?`)
+      .prepare(`${SERMON_SELECT} WHERE s.video_id = ?`)
       .get(videoId) as SermonRow | undefined) ?? null
   )
 }
 
 export function getSermonsByDate(date: string): SermonRow[] {
   return getDb()
-    .prepare(`SELECT * FROM sermons WHERE date LIKE ? AND ingestion_status = 'done' ORDER BY date DESC`)
+    .prepare(`${SERMON_SELECT} WHERE s.date LIKE ? AND s.ingestion_status = 'done' ORDER BY s.date DESC`)
     .all(`${date}%`) as SermonRow[]
+}
+
+export function getSermonsByTheme(themeId: string): SermonRow[] {
+  return getDb()
+    .prepare(
+      `${SERMON_SELECT} WHERE t.theme_id = ? AND s.ingestion_status = 'done' ORDER BY s.date DESC`
+    )
+    .all(themeId) as SermonRow[]
+}
+
+// Resolve a free-text theme term (e.g. "faith") to its sermons via a substring
+// match on the theme name — so "faith" still matches a "Faith Foundations" theme.
+export function getSermonsByThemeName(name: string): SermonRow[] {
+  return getDb()
+    .prepare(
+      `${SERMON_SELECT} WHERE t.name IS NOT NULL AND LOWER(t.name) LIKE LOWER(?)
+       AND s.ingestion_status = 'done' ORDER BY s.date DESC`
+    )
+    .all(`%${name}%`) as SermonRow[]
+}
+
+// Distinct sermons whose chunks match an FTS query, ranked by best chunk relevance.
+// Used as the keyword fallback when a theme term isn't a formal theme name.
+export function searchSermons(query: string, limit = 50): SermonRow[] {
+  return getDb()
+    .prepare(
+      `SELECT s.*, t.name AS theme
+       FROM sermons s
+       LEFT JOIN themes t ON t.id = s.theme_id
+       JOIN (
+         SELECT c.sermon_id AS sid, MIN(fts.rank) AS best_rank
+         FROM chunks_fts fts
+         JOIN chunks c ON c.id = fts.rowid
+         WHERE chunks_fts MATCH ?
+         GROUP BY c.sermon_id
+       ) m ON m.sid = s.id
+       WHERE s.ingestion_status = 'done'
+       ORDER BY m.best_rank
+       LIMIT ?`
+    )
+    .all(sanitizeFtsQuery(query), limit) as SermonRow[]
+}
+
+// Sermons that are genuinely *about* a subject, ranked by relevance density —
+// the share of the sermon's sections whose Claude-derived topics/summary match.
+// A sermon predominantly about faith outranks one that mentions it once; a
+// sermon that only references the word in passing (content only) is excluded.
+export function searchSermonsByTopic(term: string, limit = 50): SermonRow[] {
+  const match = topicMatchQuery(term)
+  if (!match) return []
+  return getDb()
+    .prepare(
+      `SELECT s.*, th.name AS theme
+       FROM sermons s
+       LEFT JOIN themes th ON th.id = s.theme_id
+       JOIN (
+         SELECT c.sermon_id AS sid,
+                COUNT(*) AS topic_hits,
+                COUNT(*) * 1.0 /
+                  (SELECT COUNT(*) FROM chunks cc WHERE cc.sermon_id = c.sermon_id) AS density
+         FROM chunks_fts fts
+         JOIN chunks c ON c.id = fts.rowid
+         WHERE chunks_fts MATCH ?
+         GROUP BY c.sermon_id
+       ) m ON m.sid = s.id
+       WHERE s.ingestion_status = 'done'
+       ORDER BY m.density DESC, m.topic_hits DESC, s.date DESC
+       LIMIT ?`
+    )
+    .all(match, limit) as SermonRow[]
+}
+
+export function listThemes(): ThemeRow[] {
+  return getDb().prepare(`SELECT * FROM themes ORDER BY name`).all() as ThemeRow[]
 }
 
 export function getChunksBySermonId(sermonId: number): ChunkRow[] {
@@ -187,10 +337,11 @@ export function getChunksBySermonId(sermonId: number): ChunkRow[] {
 export function searchChunks(query: string, limit = 10): ChunkWithSermon[] {
   return getDb()
     .prepare(
-      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker, s.series
+      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker, t.name AS theme
        FROM chunks_fts fts
        JOIN chunks c ON c.id = fts.rowid
        JOIN sermons s ON s.id = c.sermon_id
+       LEFT JOIN themes t ON t.id = s.theme_id
        WHERE chunks_fts MATCH ?
        ORDER BY rank
        LIMIT ?`
@@ -200,7 +351,7 @@ export function searchChunks(query: string, limit = 10): ChunkWithSermon[] {
 
 export function listSermons(limit = 20): SermonRow[] {
   return getDb()
-    .prepare(`SELECT * FROM sermons WHERE ingestion_status = 'done' ORDER BY date DESC LIMIT ?`)
+    .prepare(`${SERMON_SELECT} WHERE s.ingestion_status = 'done' ORDER BY s.date DESC LIMIT ?`)
     .all(limit) as SermonRow[]
 }
 
@@ -211,7 +362,7 @@ export function getNearestSermonByDate(date: string): SermonRow | null {
   return (
     (getDb()
       .prepare(
-        `SELECT * FROM sermons WHERE ingestion_status = 'done' ORDER BY ABS(julianday(date) - julianday(?)) LIMIT 1`
+        `${SERMON_SELECT} WHERE s.ingestion_status = 'done' ORDER BY ABS(julianday(s.date) - julianday(?)) LIMIT 1`
       )
       .get(padded) as SermonRow | undefined) ?? null
   )
@@ -225,6 +376,7 @@ export interface JobRow {
   download_url: string | null
   payload: string | null
   status: string
+  phase: string | null
   message: string | null
   error: string | null
   created_at: string
@@ -238,6 +390,7 @@ export function upsertJob(job: {
   download_url?: string
   payload?: string
   status: string
+  phase?: string
   message?: string
   error?: string
   createdAt: Date
@@ -246,10 +399,11 @@ export function upsertJob(job: {
 }): void {
   getDb()
     .prepare(
-      `INSERT INTO jobs (id, title, download_url, payload, status, message, error, created_at, started_at, completed_at)
-       VALUES (@id, @title, @download_url, @payload, @status, @message, @error, @created_at, @started_at, @completed_at)
+      `INSERT INTO jobs (id, title, download_url, payload, status, phase, message, error, created_at, started_at, completed_at)
+       VALUES (@id, @title, @download_url, @payload, @status, @phase, @message, @error, @created_at, @started_at, @completed_at)
        ON CONFLICT(id) DO UPDATE SET
          status       = excluded.status,
+         phase        = excluded.phase,
          message      = excluded.message,
          error        = excluded.error,
          started_at   = excluded.started_at,
@@ -261,6 +415,7 @@ export function upsertJob(job: {
       download_url: job.download_url ?? null,
       payload: job.payload ?? null,
       status: job.status,
+      phase: job.phase ?? null,
       message: job.message ?? null,
       error: job.error ?? null,
       created_at: job.createdAt.toISOString(),
@@ -288,6 +443,108 @@ export function failStaleJobs(): void {
        WHERE status IN ('queued', 'running')`
     )
     .run()
+}
+
+// ── Missing sermons ──────────────────────────────────────────────────────────
+
+export type MissingSermonKind = 'no_audio' | 'too_long' | 'timeout' | 'error'
+
+export interface MissingSermonRow {
+  id: number
+  video_id: string
+  title: string
+  date: string | null
+  download_url: string | null
+  webpage_url: string | null
+  speaker: string | null
+  theme: string | null
+  kind: MissingSermonKind
+  reason: string
+  created_at: string
+  updated_at: string
+}
+
+export interface RecordMissingSermonInput {
+  video_id: string         // stable identity so retries upsert instead of duplicating
+  title: string
+  date?: string
+  download_url?: string
+  webpage_url?: string
+  speaker?: string
+  theme?: string
+  kind: MissingSermonKind
+  reason: string
+}
+
+export function recordMissingSermon(data: RecordMissingSermonInput): void {
+  getDb()
+    .prepare(
+      `INSERT INTO missing_sermons (video_id, title, date, download_url, webpage_url, speaker, theme, kind, reason)
+       VALUES (@video_id, @title, @date, @download_url, @webpage_url, @speaker, @theme, @kind, @reason)
+       ON CONFLICT(video_id) DO UPDATE SET
+         title        = excluded.title,
+         date         = excluded.date,
+         download_url = excluded.download_url,
+         webpage_url  = excluded.webpage_url,
+         speaker      = excluded.speaker,
+         theme        = excluded.theme,
+         kind         = excluded.kind,
+         reason       = excluded.reason,
+         updated_at   = datetime('now')`
+    )
+    .run({
+      video_id: data.video_id,
+      title: data.title,
+      date: data.date ?? null,
+      download_url: data.download_url ?? null,
+      webpage_url: data.webpage_url ?? null,
+      speaker: data.speaker ?? null,
+      theme: data.theme ?? null,
+      kind: data.kind,
+      reason: data.reason,
+    })
+}
+
+export function listMissingSermons(limit = 50): MissingSermonRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM missing_sermons ORDER BY updated_at DESC LIMIT ?`)
+    .all(limit) as MissingSermonRow[]
+}
+
+/** Video IDs already recorded as missing for the given kind — used by the sync
+ * to skip sermons it knows will fail again (e.g. `no_audio`). */
+export function getMissingVideoIdsByKind(kind: MissingSermonKind): Set<string> {
+  const rows = getDb()
+    .prepare(`SELECT video_id FROM missing_sermons WHERE kind = ?`)
+    .all(kind) as { video_id: string }[]
+  return new Set(rows.map((r) => r.video_id))
+}
+
+/** Removes a missing-sermon entry once it has been successfully ingested. */
+export function removeMissingSermon(videoId: string): void {
+  getDb().prepare(`DELETE FROM missing_sermons WHERE video_id = ?`).run(videoId)
+}
+
+// ── Config key-value store ───────────────────────────────────────────────────
+
+export function getConfig(key: string): string | null {
+  const row = getDb()
+    .prepare(`SELECT value FROM config WHERE key = ?`)
+    .get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setConfig(key: string, value: string): void {
+  getDb()
+    .prepare(`INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+    .run(key, value)
+}
+
+export function countSermons(): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) as count FROM sermons WHERE ingestion_status = 'done'`)
+    .get() as { count: number }
+  return row.count
 }
 
 export function getSpeakersMatchingFilter(filter: string): string[] {

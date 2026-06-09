@@ -3,6 +3,8 @@ import { initDatabase } from '../src/db/connection.js'
 import {
   saveSermon,
   insertPartialSermon,
+  insertTranscription,
+  getTranscriptionBySermonId,
   completeSermon,
   saveChunks,
   getSermonByVideoId,
@@ -12,6 +14,11 @@ import {
   getChunksBySermonId,
   searchChunks,
   listSermons,
+  getSermonsByTheme,
+  listThemes,
+  recordMissingSermon,
+  listMissingSermons,
+  removeMissingSermon,
   type SaveSermonInput,
   type SaveChunkInput,
 } from '../src/db/queries.js'
@@ -29,7 +36,7 @@ function sampleSermon(overrides: Partial<SaveSermonInput> = {}): SaveSermonInput
     download_url: 'https://example.com/sermon.mp3',
     speaker: 'Pastor Test',
     duration: 3600,
-    series: 'Faith Foundations-2024',
+    theme: { themeId: 'theme-faith', name: 'Faith Foundations', slug: 'faith-foundations' },
     ...overrides,
   }
 }
@@ -141,6 +148,7 @@ describe('searchChunks (FTS5)', () => {
     expect(results[0].sermon_title).toBe('Sunday Service')
     expect(results[0].date).toBe('2024-03-10')
     expect(results[0].speaker).toBe('Pastor Test')
+    expect(results[0].theme).toBe('Faith Foundations')
   })
 })
 
@@ -200,22 +208,14 @@ describe('getSpeakersMatchingFilter', () => {
   })
 })
 
-describe('insertPartialSermon / completeSermon', () => {
+describe('insertPartialSermon / completeSermon / insertTranscription', () => {
   it('partial sermon is not returned by listSermons until completed', () => {
-    insertPartialSermon({
-      ...sampleSermon(),
-      duration: 3600,
-      transcription: '[]',
-    })
+    insertPartialSermon({ ...sampleSermon(), duration: 3600 })
     expect(listSermons(10)).toHaveLength(0)
   })
 
-  it('completeSermon makes it visible and clears transcription', () => {
-    const id = insertPartialSermon({
-      ...sampleSermon(),
-      duration: 3600,
-      transcription: '[{"text":"test","start":0,"duration":1}]',
-    })
+  it('completeSermon makes it visible and sets status to done', () => {
+    const id = insertPartialSermon({ ...sampleSermon(), duration: 3600 })
     completeSermon(id)
     const rows = listSermons(10)
     expect(rows).toHaveLength(1)
@@ -224,15 +224,123 @@ describe('insertPartialSermon / completeSermon', () => {
   })
 
   it('partial record is retrievable by video_id for retry', () => {
-    insertPartialSermon({
-      ...sampleSermon(),
-      duration: 3600,
-      transcription: '[{"text":"test","start":0,"duration":1}]',
-    })
+    const id = insertPartialSermon({ ...sampleSermon(), duration: 3600 })
     const row = getSermonByVideoId('abc123def456abcd')
     expect(row).not.toBeNull()
     expect(row!.ingestion_status).toBe('transcribed')
-    expect(row!.transcription).not.toBeNull()
+
+    // Transcription is stored in the transcriptions table, not on the sermon row
+    insertTranscription(id, 'Hello church.', '[{"text":"Hello church.","start":0,"duration":2}]')
+    const t = getTranscriptionBySermonId(id)
+    expect(t).not.toBeNull()
+    expect(t!.transcript).toBe('Hello church.')
+    expect(JSON.parse(t!.segments)).toHaveLength(1)
+  })
+
+  it('description is stored and retrievable', () => {
+    const id = saveSermon({ ...sampleSermon(), description: 'A sermon about faith.' })
+    const row = getSermonByVideoId('abc123def456abcd')
+    expect(row!.description).toBe('A sermon about faith.')
+  })
+
+  it('excerpt is stored and retrievable', () => {
+    saveSermon({ ...sampleSermon(), excerpt: 'A short summary of the sermon.' })
+    const row = getSermonByVideoId('abc123def456abcd')
+    expect(row!.excerpt).toBe('A short summary of the sermon.')
+  })
+})
+
+describe('themes', () => {
+  it('attaches the theme name to a saved sermon', () => {
+    saveSermon(sampleSermon())
+    const row = getSermonByVideoId('abc123def456abcd')
+    expect(row!.theme).toBe('Faith Foundations')
+    expect(row!.theme_id).toBeGreaterThan(0)
+  })
+
+  it('reuses one themes row across sermons sharing a theme_id', () => {
+    saveSermon(sampleSermon({ video_id: 'aaaaaaaaaaaaaaaa' }))
+    saveSermon(sampleSermon({ video_id: 'bbbbbbbbbbbbbbbb', date: '2024-04-01' }))
+    expect(listThemes()).toHaveLength(1)
+  })
+
+  it('updates the theme name on re-save but keeps the same theme_id mapping', () => {
+    saveSermon(sampleSermon({ video_id: 'aaaaaaaaaaaaaaaa' }))
+    saveSermon(
+      sampleSermon({
+        video_id: 'bbbbbbbbbbbbbbbb',
+        date: '2024-04-01',
+        theme: { themeId: 'theme-faith', name: 'Renamed Theme', slug: 'faith-foundations' },
+      })
+    )
+    const themes = listThemes()
+    expect(themes).toHaveLength(1)
+    expect(themes[0].name).toBe('Renamed Theme')
+  })
+
+  it('fetches all sermons for a theme by upstream theme_id', () => {
+    saveSermon(sampleSermon({ video_id: 'aaaaaaaaaaaaaaaa', date: '2024-01-01' }))
+    saveSermon(sampleSermon({ video_id: 'bbbbbbbbbbbbbbbb', date: '2024-03-10' }))
+    saveSermon(
+      sampleSermon({
+        video_id: 'cccccccccccccccc',
+        date: '2024-05-01',
+        theme: { themeId: 'theme-other', name: 'Other Theme' },
+      })
+    )
+
+    const faithSermons = getSermonsByTheme('theme-faith')
+    expect(faithSermons).toHaveLength(2)
+    expect(faithSermons[0].date).toBe('2024-03-10') // date DESC
+  })
+
+  it('returns null theme when a sermon has none', () => {
+    saveSermon(sampleSermon({ theme: undefined }))
+    const row = getSermonByVideoId('abc123def456abcd')
+    expect(row!.theme).toBeNull()
+    expect(row!.theme_id).toBeNull()
+  })
+})
+
+describe('missing sermons', () => {
+  it('records a failed sermon and lists it', () => {
+    recordMissingSermon({
+      video_id: 'vid-no-audio',
+      title: 'No Audio Sermon',
+      date: '2024-03-10',
+      download_url: 'https://media.example.org/audio',
+      webpage_url: 'https://youtu.be/abc',
+      speaker: 'Pastor Test',
+      theme: 'Faith Foundations',
+      kind: 'no_audio',
+      reason: 'No audio — download_url has no file path',
+    })
+
+    const rows = listMissingSermons()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].title).toBe('No Audio Sermon')
+    expect(rows[0].kind).toBe('no_audio')
+    expect(rows[0].theme).toBe('Faith Foundations')
+  })
+
+  it('upserts on the same video_id instead of duplicating', () => {
+    recordMissingSermon({ video_id: 'vid-1', title: 'A', kind: 'timeout', reason: 'first' })
+    recordMissingSermon({ video_id: 'vid-1', title: 'A', kind: 'error', reason: 'second' })
+
+    const rows = listMissingSermons()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].kind).toBe('error')
+    expect(rows[0].reason).toBe('second')
+  })
+
+  it('removes a missing sermon once resolved', () => {
+    recordMissingSermon({ video_id: 'vid-1', title: 'A', kind: 'error', reason: 'x' })
+    recordMissingSermon({ video_id: 'vid-2', title: 'B', kind: 'error', reason: 'y' })
+    removeMissingSermon('vid-1')
+
+    const rows = listMissingSermons()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].video_id).toBe('vid-2')
   })
 })
 

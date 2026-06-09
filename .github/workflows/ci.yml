@@ -8,7 +8,7 @@ on:
 
 jobs:
   ci:
-    name: Type check / Lint / Test / Build
+    name: App Checks
     runs-on: ubuntu-latest
 
     steps:
@@ -20,12 +20,21 @@ jobs:
           cache: yarn
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        # Retry to ride out transient network flakes when native deps (e.g. sharp)
+        # download prebuilt binaries from GitHub Releases during postinstall.
+        run: |
+          for attempt in 1 2 3; do
+            echo "::group::yarn install (attempt $attempt)"
+            if yarn install --frozen-lockfile; then echo "::endgroup::"; exit 0; fi
+            echo "::endgroup::"
+            echo "yarn install failed on attempt $attempt"
+            sleep $((attempt * 15))
+          done
+          echo "yarn install failed after 3 attempts" >&2
+          exit 1
 
       - name: Type check
         run: yarn typecheck
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Lint
         run: yarn lint

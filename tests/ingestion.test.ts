@@ -28,6 +28,7 @@ import { downloadMp3 } from '../src/ingestion/downloader.js'
 import { transcribeAudio } from '../src/ingestion/transcriber.js'
 import { chunkSermon } from '../src/ingestion/chunker.js'
 import { ingestSermon, type IngestRequest } from '../src/ingestion/pipeline.js'
+import { listMissingSermons } from '../src/db/queries.js'
 import Anthropic from '@anthropic-ai/sdk'
 
 const mockDownload = vi.mocked(downloadMp3)
@@ -66,7 +67,7 @@ beforeEach(() => {
   // Default happy-path mocks
   const cleanup = vi.fn()
   mockDownload.mockResolvedValue({ filePath: '/tmp/test.mp3', cleanup })
-  mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 300 })
+  mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 300, transcript: 'Hello church. Let us pray.' })
   mockChunk.mockResolvedValue(fakeChunks)
 })
 
@@ -109,7 +110,7 @@ describe('ingestSermon — duplicate detection', () => {
 describe('ingestSermon — duration limit', () => {
   it('returns status too_long when duration exceeds limit', async () => {
     // Default MAX_AUDIO_DURATION_SECONDS is 7200
-    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7201 })
+    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7201, transcript: '' })
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('too_long')
     expect(result.message).toContain('exceeds')
@@ -118,13 +119,13 @@ describe('ingestSermon — duration limit', () => {
   it('calls cleanup even when too long', async () => {
     const cleanup = vi.fn()
     mockDownload.mockResolvedValue({ filePath: '/tmp/test.mp3', cleanup })
-    mockTranscribe.mockResolvedValue({ segments: [], duration: 9999 })
+    mockTranscribe.mockResolvedValue({ segments: [], duration: 9999, transcript: '' })
     await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(cleanup).toHaveBeenCalledOnce()
   })
 
   it('passes at exact duration limit', async () => {
-    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7200 })
+    mockTranscribe.mockResolvedValue({ segments: fakeSegments, duration: 7200, transcript: 'Hello church. Let us pray.' })
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('ok')
   })
@@ -141,10 +142,10 @@ describe('ingestSermon — error paths', () => {
   it('returns status error when transcription fails', async () => {
     const cleanup = vi.fn()
     mockDownload.mockResolvedValue({ filePath: '/tmp/test.mp3', cleanup })
-    mockTranscribe.mockRejectedValue(new Error('Whisper crashed'))
+    mockTranscribe.mockRejectedValue(new Error('OpenAI API error'))
     const result = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(result.status).toBe('error')
-    expect(result.message).toContain('Whisper crashed')
+    expect(result.message).toContain('OpenAI API error')
     expect(cleanup).toHaveBeenCalledOnce()
   })
 
@@ -158,6 +159,53 @@ describe('ingestSermon — error paths', () => {
   })
 })
 
+describe('ingestSermon — missing sermons', () => {
+  it('records a missing sermon when ingestion fails', async () => {
+    mockDownload.mockRejectedValue(new Error('Network error'))
+    await ingestSermon(baseRequest, fakeAnthropicClient)
+
+    const missing = listMissingSermons()
+    expect(missing).toHaveLength(1)
+    expect(missing[0].title).toBe('Sunday Service')
+    expect(missing[0].reason).toContain('Network error')
+    expect(missing[0].kind).toBe('error')
+  })
+
+  it('short-circuits before download when download_url is just the audio base', async () => {
+    // AUDIO_BASE_URL in tests/setup.ts is https://sermons-api.test.example.com/
+    const req: IngestRequest = { ...baseRequest, videoId: 'no-audio-1', downloadUrl: 'https://sermons-api.test.example.com/' }
+    const result = await ingestSermon(req, fakeAnthropicClient)
+
+    expect(result.status).toBe('error')
+    expect(result.message).toContain('no file path')
+    expect(mockDownload).not.toHaveBeenCalled()
+
+    const missing = listMissingSermons()
+    expect(missing).toHaveLength(1)
+    expect(missing[0].kind).toBe('no_audio')
+  })
+
+  it('classifies download timeouts as kind "timeout"', async () => {
+    mockDownload.mockRejectedValue(new Error('The operation was aborted due to timeout'))
+    await ingestSermon({ ...baseRequest, videoId: 'timeout-1' }, fakeAnthropicClient)
+
+    const missing = listMissingSermons()
+    expect(missing).toHaveLength(1)
+    expect(missing[0].kind).toBe('timeout')
+  })
+
+  it('clears the missing entry once the sermon ingests successfully', async () => {
+    mockChunk.mockRejectedValueOnce(new Error('Claude API error'))
+    await ingestSermon(baseRequest, fakeAnthropicClient)
+    expect(listMissingSermons()).toHaveLength(1)
+
+    mockChunk.mockResolvedValueOnce(fakeChunks)
+    const second = await ingestSermon(baseRequest, fakeAnthropicClient)
+    expect(second.status).toBe('ok')
+    expect(listMissingSermons()).toHaveLength(0)
+  })
+})
+
 describe('ingestSermon — retry resume', () => {
   it('resumes from chunking without re-downloading when transcription is saved', async () => {
     // First attempt: chunking fails after transcription
@@ -166,11 +214,23 @@ describe('ingestSermon — retry resume', () => {
     expect(first.status).toBe('error')
     expect(mockDownload).toHaveBeenCalledTimes(1)
 
-    // Second attempt: chunking succeeds — no re-download
+    // Second attempt: chunking succeeds — no re-download, reads from transcriptions table
     mockChunk.mockResolvedValueOnce(fakeChunks)
     const second = await ingestSermon(baseRequest, fakeAnthropicClient)
     expect(second.status).toBe('ok')
     expect(mockDownload).toHaveBeenCalledTimes(1) // still only once
+    expect(mockTranscribe).toHaveBeenCalledTimes(1) // transcription not repeated
+  })
+
+  it('uses videoId from request when provided', async () => {
+    const reqWithId: IngestRequest = { ...baseRequest, videoId: 'custom-id-abc123' }
+    const result = await ingestSermon(reqWithId, fakeAnthropicClient)
+    expect(result.status).toBe('ok')
+
+    // Same videoId, different URL → detected as duplicate
+    const dup = await ingestSermon({ ...reqWithId, downloadUrl: 'https://other.com/sermon.mp3' }, fakeAnthropicClient)
+    expect(dup.status).toBe('duplicate')
+    expect(mockDownload).toHaveBeenCalledTimes(1)
   })
 })
 

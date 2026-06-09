@@ -2,6 +2,14 @@ import type Database from 'better-sqlite3'
 
 export function initDb(db: Database.Database): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS themes (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      theme_id   TEXT UNIQUE NOT NULL,
+      name       TEXT NOT NULL,
+      slug       TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS sermons (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       video_id         TEXT UNIQUE NOT NULL,
@@ -12,10 +20,20 @@ export function initDb(db: Database.Database): void {
       speaker          TEXT,
       duration         INTEGER,
       tags             TEXT,
-      series           TEXT,
+      excerpt          TEXT,
+      theme_id         INTEGER REFERENCES themes(id),
+      description      TEXT,
       ingestion_status TEXT NOT NULL DEFAULT 'done',
       transcription    TEXT,
       created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS transcriptions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      sermon_id  INTEGER UNIQUE NOT NULL REFERENCES sermons(id),
+      transcript TEXT NOT NULL,
+      segments   TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS chunks (
@@ -36,6 +54,7 @@ export function initDb(db: Database.Database): void {
       download_url TEXT,
       payload      TEXT,
       status       TEXT NOT NULL DEFAULT 'queued',
+      phase        TEXT,
       message      TEXT,
       error        TEXT,
       created_at   TEXT NOT NULL,
@@ -43,10 +62,35 @@ export function initDb(db: Database.Database): void {
       completed_at TEXT
     );
 
-    CREATE INDEX IF NOT EXISTS idx_sermon_date       ON sermons(date);
-    CREATE INDEX IF NOT EXISTS idx_sermon_video_id   ON sermons(video_id);
-    CREATE INDEX IF NOT EXISTS idx_chunk_sermon_id   ON chunks(sermon_id);
+    -- Sermons that could not be ingested (no audio path, too long, timeout, etc.)
+    -- so an admin can review them in the DB browser. Keyed by video_id (the API's
+    -- stable _id) so retries upsert. Server-restart failures are NOT recorded here.
+    CREATE TABLE IF NOT EXISTS missing_sermons (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      video_id     TEXT UNIQUE NOT NULL,
+      title        TEXT NOT NULL,
+      date         TEXT,
+      download_url TEXT,
+      webpage_url  TEXT,
+      speaker      TEXT,
+      theme        TEXT,
+      kind         TEXT NOT NULL DEFAULT 'error',  -- no_audio | too_long | timeout | error
+      reason       TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sermon_date         ON sermons(date);
+    CREATE INDEX IF NOT EXISTS idx_sermon_video_id     ON sermons(video_id);
+    CREATE INDEX IF NOT EXISTS idx_chunk_sermon_id     ON chunks(sermon_id);
+    CREATE INDEX IF NOT EXISTS idx_transcription_sermon ON transcriptions(sermon_id);
     CREATE INDEX IF NOT EXISTS idx_job_created       ON jobs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_missing_updated   ON missing_sermons(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS config (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
       content,
@@ -90,15 +134,26 @@ export function initDb(db: Database.Database): void {
   if (sermonColNames.has('url') && !sermonColNames.has('download_url')) {
     db.exec(`ALTER TABLE sermons RENAME COLUMN url TO download_url`)
   }
-  if (!sermonColNames.has('series')) {
-    db.exec(`ALTER TABLE sermons ADD COLUMN series TEXT`)
+  if (!sermonColNames.has('excerpt')) {
+    db.exec(`ALTER TABLE sermons ADD COLUMN excerpt TEXT`)
   }
+  if (!sermonColNames.has('theme_id')) {
+    // Nullable FK with no default — safe to add via ALTER TABLE in SQLite.
+    // The legacy `series` TEXT column (if present) is left in place but unused.
+    db.exec(`ALTER TABLE sermons ADD COLUMN theme_id INTEGER REFERENCES themes(id)`)
+  }
+  // Index must come after migration shim — existing DBs won't have theme_id yet when
+  // the main db.exec() block runs, causing "no such column" on the CREATE INDEX.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sermon_theme ON sermons(theme_id)`)
   if (!sermonColNames.has('ingestion_status')) {
     // Existing rows are fully ingested, so default them to 'done'
     db.exec(`ALTER TABLE sermons ADD COLUMN ingestion_status TEXT NOT NULL DEFAULT 'done'`)
   }
   if (!sermonColNames.has('transcription')) {
     db.exec(`ALTER TABLE sermons ADD COLUMN transcription TEXT`)
+  }
+  if (!sermonColNames.has('description')) {
+    db.exec(`ALTER TABLE sermons ADD COLUMN description TEXT`)
   }
 
   const existingChunkCols = db
@@ -117,5 +172,8 @@ export function initDb(db: Database.Database): void {
 
   if (!jobColNames.has('payload')) {
     db.exec(`ALTER TABLE jobs ADD COLUMN payload TEXT`)
+  }
+  if (!jobColNames.has('phase')) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN phase TEXT`)
   }
 }

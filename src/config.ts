@@ -3,14 +3,20 @@ import { z } from 'zod'
 
 const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
+  OPENAI_API_KEY: z.string().min(1, 'OPENAI_API_KEY is required'),
   ADMIN_SECRET: z.string().min(1, 'ADMIN_SECRET is required'),
   MINISTRY_NAME: z.string().min(1).default('the church'),
   DB_PATH: z.string().default('./data/sermons.db'),
   PORT: z.coerce.number().int().positive().default(3000),
   MAX_AUDIO_DURATION_SECONDS: z.coerce.number().int().positive().default(7200),
-  WHISPER_MODEL: z.string().default('medium.en'),
-  CLAUDE_MODEL: z.string().default('claude-sonnet-4-20250514'),
+  CLAUDE_MODEL: z.string().default('claude-sonnet-4-6'),
   CHUNKING_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+  SERMON_BASE_URL: z.string().url('SERMON_BASE_URL must be a valid URL'),
+  AUDIO_BASE_URL: z.string().url('AUDIO_BASE_URL must be a valid URL'),
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
 })
 
 const parsed = envSchema.safeParse(process.env)

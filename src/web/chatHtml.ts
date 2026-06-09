@@ -8,6 +8,7 @@ export function chatHtml(): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${ministry}</title>
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
   <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -30,8 +31,8 @@ export function chatHtml(): string {
       justify-content: space-between;
       flex-shrink: 0;
     }
-    .header-logo { height: 28px; width: auto; display: block; }
-    .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; }
+    .header-logo { height: 28px; width: auto; display: block; margin: 0 auto; }
+    .subtitle { font-size: 0.72rem; color: #555; margin-top: 0.25rem; letter-spacing: 0.06em; text-transform: uppercase; text-align: center; }
 
     .new-btn {
       background: none;
@@ -278,7 +279,7 @@ export function chatHtml(): string {
   })
 
   sendBtn.addEventListener('click', send)
-  newBtn.addEventListener('click', function () { if (!busy) location.reload() })
+  newBtn.addEventListener('click', function () { if (!busy) window.open(location.href, '_blank') })
 
   // ── Helpers ─────────────────────────────────────────────────────────────
   function scroll() { msgList.scrollTop = msgList.scrollHeight }
@@ -330,6 +331,22 @@ export function chatHtml(): string {
     return row
   }
 
+  // (Re)render the collapsible sources list on a row. Safe to call repeatedly \u2014
+  // the agentic backend can emit sources after the answer bubble already exists.
+  function applySources(row, sources) {
+    var existing = row.querySelector('details.sources')
+    if (existing) existing.remove()
+    if (!sources || sources.length === 0) return
+    var det = document.createElement('details')
+    det.className = 'sources'
+    var items = sources.map(function (s) {
+      var ts = s.timestamp ? ' [' + esc(s.timestamp) + ']' : ''
+      return '<li>' + esc(s.title) + ' \u2014 ' + esc(s.date) + ts + '</li>'
+    }).join('')
+    det.innerHTML = '<summary>Sources (' + sources.length + ')</summary><ul>' + items + '</ul>'
+    row.appendChild(det)
+  }
+
   function addAssistantBubble(sources) {
     var row = document.createElement('div')
     row.className = 'msg-row assistant'
@@ -338,19 +355,10 @@ export function chatHtml(): string {
     bub.className = 'bubble'
     row.appendChild(bub)
 
-    if (sources && sources.length > 0) {
-      var det = document.createElement('details')
-      det.className = 'sources'
-      var items = sources.map(function (s) {
-        return '<li>' + esc(s.title) + ' \u2014 ' + esc(s.date) + ' [' + esc(s.timestamp) + ']</li>'
-      }).join('')
-      det.innerHTML = '<summary>Sources (' + sources.length + ')</summary><ul>' + items + '</ul>'
-      row.appendChild(det)
-    }
-
     msgList.appendChild(row)
+    applySources(row, sources)
     scroll()
-    return bub
+    return row
   }
 
   // ── SSE stream reader ───────────────────────────────────────────────────
@@ -358,6 +366,7 @@ export function chatHtml(): string {
     var reader  = response.body.getReader()
     var dec     = new TextDecoder()
     var buf     = ''
+    var row     = null
     var bubble  = null
     var text    = ''
     var sources = null
@@ -385,8 +394,9 @@ export function chatHtml(): string {
 
             if (ev.type === 'context') {
               sources = ev.sources || null
+              if (row) applySources(row, sources)
             } else if (ev.type === 'delta') {
-              if (!bubble) bubble = addAssistantBubble(sources)
+              if (!bubble) { row = addAssistantBubble(sources); bubble = row.querySelector('.bubble') }
               text += ev.text
               bubble.innerHTML = marked.parse(text)
               scroll()

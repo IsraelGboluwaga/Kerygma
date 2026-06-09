@@ -1,85 +1,113 @@
 import fs from 'node:fs'
-// nodejs-whisper exposes a named export, not a default export
-import { nodewhisper as whisper } from 'nodejs-whisper'
+import os from 'node:os'
+import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import OpenAI from 'openai'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
 import { errMsg } from '../utils.js'
 
 export interface TranscriptSegment {
   text: string
-  start: number // seconds
+  start: number    // seconds
   duration: number // seconds
 }
 
 export interface TranscribeResult {
   segments: TranscriptSegment[]
-  duration: number // seconds
+  duration: number   // seconds
+  transcript: string // plain-text full transcription
 }
 
-interface WhisperSegment {
-  offsets: { from: number; to: number } // milliseconds
-  text: string
+// OpenAI Whisper API hard limit
+const WHISPER_MAX_BYTES = 25 * 1024 * 1024  // 25 MB
+
+// 24 kbps mono keeps even a 2-hour sermon under 25 MB (~21 MB)
+// Whisper was trained on 16 kHz audio so 16 kHz sample rate is sufficient for accuracy
+const FFMPEG_COMPRESS_ARGS = ['-ar', '16000', '-ac', '1', '-b:a', '24k']
+
+const TRANSCRIPTION_TIMEOUT_MS = 10 * 60 * 1000  // 10 minutes
+
+let _client: OpenAI | null = null
+
+function getClient(): OpenAI {
+  if (!_client) _client = new OpenAI({ apiKey: config.OPENAI_API_KEY })
+  return _client
 }
 
-interface WhisperOutput {
-  transcription: WhisperSegment[]
-}
-
-// TODO: replace with OpenAI Whisper API (api.openai.com/v1/audio/transcriptions)
-// local nodejs-whisper runs at 0.5–1.5× realtime on CPU; API completes in minutes
-// cost: ~$0.006/min of audio (~$169 for 468 × 60-min sermons)
-export async function transcribeAudio(
-  filePath: string,
-): Promise<TranscribeResult> {
-  logger.info(`Starting transcription: ${filePath}`)
-  try {
-    await whisper(filePath, {
-      modelName: config.WHISPER_MODEL,
-      autoDownloadModelName: config.WHISPER_MODEL,
-      removeWavFileAfterTranscription: false,
-      whisperOptions: {
-        outputInJsonFull: true,
-      },
-    })
-  } catch (err) {
-    const full = errMsg(err)
-    logger.error(`Whisper transcription failed:\n${full}`)
-    const firstLine = full.split('\n').find((l) => l.trim()) ?? full
-    throw new Error(`Transcription failed: ${firstLine.trim()}`)
+function compressAudio(inputPath: string): { compressedPath: string; cleanup: () => void } {
+  const compressedPath = path.join(
+    os.tmpdir(),
+    `kerygma-compressed-${Date.now()}.mp3`
+  )
+  logger.info(`Compressing audio to 16 kHz mono 24 kbps: ${inputPath}`)
+  execFileSync('ffmpeg', [
+    '-i', inputPath,
+    ...FFMPEG_COMPRESS_ARGS,
+    '-y', compressedPath,
+  ])
+  const { size } = fs.statSync(compressedPath)
+  const sizeMb = (size / 1024 / 1024).toFixed(1)
+  logger.info(`Compressed to ${sizeMb} MB`)
+  if (size > WHISPER_MAX_BYTES) {
+    fs.unlinkSync(compressedPath)
+    throw new Error(
+      `Audio is still ${sizeMb} MB after compression — exceeds the 25 MB Whisper API limit. ` +
+      'The file may be too long; consider splitting it.'
+    )
   }
-  logger.info(`Transcription complete: ${filePath}`)
+  return {
+    compressedPath,
+    cleanup: () => { try { fs.unlinkSync(compressedPath) } catch { /* already gone */ } },
+  }
+}
 
-  // nodejs-whisper converts the input to WAV before running whisper-cli,
-  // so the sidecar is written next to the WAV file, not the original MP3.
-  const wavPath = filePath.replace(/\.[^.]+$/, '.wav')
-  const jsonPath = `${wavPath}.json`
+export async function transcribeAudio(filePath: string): Promise<TranscribeResult> {
+  logger.info(`Starting transcription: ${filePath}`)
 
-  let raw: WhisperOutput
-  try {
-    raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as WhisperOutput
-  } finally {
-    // Clean up sidecars
-    const txtPath = `${wavPath}.txt`
-    for (const p of [jsonPath, wavPath, txtPath]) {
-      try {
-        fs.unlinkSync(p)
-      } catch (err) {
-        logger.warn(`Failed to delete temp file ${p}: ${errMsg(err)}`)
-      }
+  const { size } = fs.statSync(filePath)
+  const sizeMb = (size / 1024 / 1024).toFixed(1)
+
+  let uploadPath = filePath
+  let cleanupCompressed: (() => void) | undefined
+
+  if (size > WHISPER_MAX_BYTES) {
+    logger.info(`File is ${sizeMb} MB — exceeds 25 MB Whisper limit, compressing with ffmpeg`)
+    try {
+      const compressed = compressAudio(filePath)
+      uploadPath = compressed.compressedPath
+      cleanupCompressed = compressed.cleanup
+    } catch (err) {
+      throw new Error(`Audio compression failed: ${errMsg(err)}`)
     }
   }
 
-  const segments: TranscriptSegment[] = raw.transcription.map((s) => ({
-    text: s.text.trim(),
-    start: s.offsets.from / 1000,
-    duration: (s.offsets.to - s.offsets.from) / 1000,
-  }))
+  try {
+    const response = await getClient().audio.transcriptions.create(
+      {
+        file: fs.createReadStream(uploadPath),
+        model: 'whisper-1',
+        response_format: 'verbose_json',
+      },
+      { timeout: TRANSCRIPTION_TIMEOUT_MS }
+    )
 
-  const duration =
-    segments.length > 0
-      ? segments[segments.length - 1].start +
-        segments[segments.length - 1].duration
-      : 0
+    logger.info(`Transcription complete: ${filePath}`)
 
-  return { segments, duration }
+    const segments: TranscriptSegment[] = (response.segments ?? []).map((s) => ({
+      text: s.text.trim(),
+      start: s.start,
+      duration: s.end - s.start,
+    }))
+
+    const duration =
+      response.duration ??
+      (segments.length > 0
+        ? segments[segments.length - 1].start + segments[segments.length - 1].duration
+        : 0)
+
+    return { segments, duration, transcript: response.text }
+  } finally {
+    cleanupCompressed?.()
+  }
 }

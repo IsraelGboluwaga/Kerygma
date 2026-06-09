@@ -19,6 +19,7 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 - **Whisper transcription** — local speech-to-text via nodejs-whisper
 - **Claude chunking** — sermon divided into named sections with timestamps, topics, and summaries
 - **FTS5 full-text search** — fast keyword search across all indexed content
+- **Transcripts page** — `/transcripts` finds sermons by date, theme, or keyword (natural-language or structured filters) and delivers viewable transcripts + on-demand PDF download
 - **Embeddings** — 384-dim vectors stored per chunk for future vector search
 - **MCP server** — 4 read-only tools for church members to query via Claude Desktop
 - **In-process job queue** — sequential ingestion, non-blocking admin UI
@@ -38,11 +39,18 @@ Browser (Admin)
     │  POST /admin/ingest
     ▼
 Hono HTTP Server (:3000)
-    ├── GET  /admin          → Admin form (password-gated)
-    ├── POST /admin/ingest   → Enqueue job → 202 + jobId
-    ├── GET  /admin/jobs     → Recent job statuses
-    ├── GET  /admin/jobs/:id → Poll single job
-    └── GET  /health         → { ok: true }
+    ├── GET  /admin             → Admin form (password-gated)
+    ├── GET  /admin/status      → Live status dashboard
+    ├── POST /admin/ingest      → Enqueue job → 202 + jobId
+    ├── GET  /admin/jobs        → Recent job statuses
+    ├── GET  /admin/jobs/:id    → Poll single job
+    ├── GET  /admin/status/data → Live queue + phase snapshot
+    ├── GET  /                  → Chat UI
+    ├── GET  /transcripts       → Transcripts search + table
+    ├── GET  /transcripts/search          → Date/theme/keyword results (JSON)
+    ├── GET  /transcripts/:id             → Viewable transcript
+    ├── GET  /transcripts/:id/download    → Transcript PDF
+    └── GET  /health            → { ok: true }
          │
     In-process job queue (sequential)
          │
@@ -85,9 +93,15 @@ kerygma/
 │   ├── mcp/
 │   │   └── server.ts              # 4 MCP tool registrations
 │   └── web/
-│       ├── router.ts              # Hono app — chat, admin, and health routes
+│       ├── router.ts              # Hono app — chat, admin, status, and health routes
 │       ├── adminHtml.ts           # Admin form HTML (password-gated, live job polling)
-│       └── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
+│       ├── statusHtml.ts          # Live ingestion status dashboard (phase stepper + queue)
+│       ├── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
+│       ├── transcriptsHtml.ts     # Transcripts search page (NL + structured filters, responsive table)
+│       ├── transcriptViewHtml.ts  # Single viewable transcript (timestamped segments)
+│       ├── transcriptPdf.ts       # pdfkit PDF generator + filename builder
+│       ├── transcriptQuery.ts     # Claude NL → { date, theme, speaker } filter parser
+│       └── transcriptFormat.ts    # Shared date/slug formatting helpers
 ├── tests/
 │   ├── setup.ts                   # Env vars for test context
 │   ├── db.test.ts                 # Storage layer (26 tests)
@@ -135,13 +149,9 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    Edit `.env`:
    ```env
    ANTHROPIC_API_KEY=sk-ant-...
+   OPENAI_API_KEY=sk-...
    ADMIN_SECRET=your-secret-password
-
-   # Optional
-   DB_PATH=/data/sermons.db
-   PORT=3000
-   MAX_AUDIO_DURATION_SECONDS=7200
-   WHISPER_MODEL=medium.en
+   SERMON_BASE_URL=https://sermons-api.example.com/sermons
    ```
 
 3. **Build the image**
@@ -149,7 +159,7 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
    docker build -t kerygma .
    ```
 
-   This compiles whisper.cpp and downloads the Whisper model into the image. Takes a few minutes on first build; subsequent code-only rebuilds are fast due to layer caching.
+   Builds the TypeScript source and compiles native addons. No large model downloads — transcription is handled by the OpenAI Whisper API at runtime.
 
 4. **Run**
    ```bash
@@ -158,21 +168,15 @@ Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg,
 
    The `-v kerygma-data:/data` flag creates a named volume so the SQLite database persists across container restarts. The server starts at `http://localhost:3000`.
 
-To use a larger Whisper model (e.g. `medium.en`):
-```bash
-docker build --build-arg WHISPER_MODEL=medium.en -t kerygma .
-```
-
 ---
 
 ### Local Development (without Docker)
 
-Requires: Node 20+, Yarn, cmake, ffmpeg (`brew install cmake ffmpeg` on macOS).
+Requires: Node 20+, Yarn, ffmpeg (`brew install ffmpeg` on macOS; `apt-get install ffmpeg` on Linux).
 
 ```bash
 yarn install
-npx nodejs-whisper download   # compiles whisper.cpp + downloads model (~142MB)
-cp .env.example .env          # fill in ANTHROPIC_API_KEY + ADMIN_SECRET
+cp .env.example .env          # fill in all required variables
 yarn dev
 ```
 
@@ -190,12 +194,14 @@ Fill in the form:
 - **Download URL** — direct link to the audio file (MP3)
 - **Webpage URL** *(optional)* — the sermon page on the church website
 - **Title** — sermon title
-- **Series** *(optional)* — sermon series name; stored as `Series Name-YYYY`
+- **Theme** *(optional)* — sermon theme; normalised into a `themes` table and linked by id
 - **Speaker** — preacher's name (required)
 - **Date** — sermon date
 - **Tags** *(optional)* — comma-separated keywords
 
 Click **Ingest Sermon**. The form polls every 3 seconds and shows the job status until it finishes (`done`) or fails (`failed`). Multiple sermons can be queued — they process one at a time.
+
+For deeper visibility, open the **Live status →** link (or visit `/admin/status`). It auto-refreshes every 2 seconds and shows the running job's current phase (Download → Transcribe → Chunk → Embed) plus each queued job's position in line — all from structured job state, so it adds no log noise.
 
 If a job fails after transcription, re-submitting the same URL will resume from the chunking step — the transcription is preserved in the database, so the download and Whisper step are not repeated.
 
@@ -204,6 +210,8 @@ The `X-Admin-Secret` header is sent automatically using the password you type in
 ---
 
 ### For Church Members
+
+Open `http://localhost:3000/` to ask questions in the chat UI, or `http://localhost:3000/transcripts` to find and read sermon transcripts. The transcripts page accepts a natural-language request ("sermons in February 2023", "all sermons on faith", "the message on the 4th of July 2021") or structured month/year/theme/speaker filters, lists matches in a mobile-responsive table, and offers each transcript as a viewable page and an on-demand PDF download.
 
 Connect via any MCP-compatible client. See `mcpConnect.md` for full setup instructions.
 
@@ -255,28 +263,42 @@ What has Apostle Emmanuel Iren said about healing?
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
+| `OPENAI_API_KEY` | Yes | — | OpenAI API key (used for Whisper transcription) |
 | `ADMIN_SECRET` | Yes | — | Password for the admin UI |
-| `MINISTRY_NAME` | Yes | `the church` | Ministry name shown in the UI and AI prompts |
+| `SERMON_BASE_URL` | Yes | — | Full sermon listing endpoint, e.g. `https://sermons-api.example.com/sermons` (the `page`/`perPage` query string is appended directly) |
+| `AUDIO_BASE_URL` | Yes | — | Base URL prepended to relative audio paths returned by the sermon API (a trailing slash is normalised) |
+| `MINISTRY_NAME` | No | `the church` | Ministry name shown in the UI and AI prompts |
 | `DB_PATH` | No | `./data/sermons.db` | SQLite database path |
 | `PORT` | No | `3000` | HTTP server port |
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
-| `WHISPER_MODEL` | No | `medium.en` | Whisper model name |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Claude model for chunking and synthesis |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
+| `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
+| `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream replication and dated archive exports |
+| `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication and dated archive exports |
+| `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key for Litestream replication and dated archive exports |
+| `R2_BUCKET` | No | — | R2 bucket name; replication and archive exports are skipped if any R2 var is unset |
 
 ---
 
 ## Database Schema
 
 ```sql
-sermons (id, video_id, title, date, download_url, webpage_url, speaker, series,
-         duration, tags, ingestion_status, transcription, created_at)
-chunks  (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
-chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
+themes         (id, theme_id, name, slug, created_at)
+sermons        (id, video_id, title, date, download_url, webpage_url, speaker, excerpt, theme_id,
+                description, duration, tags, ingestion_status, transcription, created_at)
+transcriptions (id, sermon_id, transcript, segments, created_at)
+chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp_end, topics, summary, embedding)
+chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
+jobs           (id, title, download_url, payload, status, phase, message, error, created_at, started_at, completed_at)
+missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, theme, kind, reason, created_at, updated_at)
 ```
 
-`video_id` is `SHA256(downloadUrl).slice(0, 16)` — duplicate detection is URL-based.
-`series` is stored as `Series Name-YYYY` (e.g. `Faith Foundations-2024`), derived from the series input and the sermon date.
-`ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete. Partial records enable retry resume without re-downloading.
+`video_id` comes from the sermon API's `_id` field, or falls back to `SHA256(downloadUrl).slice(0, 16)` for manually-ingested URLs.
+`themes` is keyed on the upstream `theme_id` (the API's theme `_id`) so a sermon's theme link survives an upstream name change; `sermons.theme_id` is a foreign key to `themes.id`.
+`excerpt` stores the short summary from the sermon listing API (kept on `sermons` for fast list/card rendering).
+`ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete.
+`transcriptions` stores the full plain-text transcript and JSON segment array separately from `sermons` to keep sermon queries fast.
+`missing_sermons` holds sermons that failed to ingest, keyed by `video_id` so retries upsert and a successful ingest clears the row. `kind` classifies the failure (`no_audio` — `download_url` was just `AUDIO_BASE_URL` with no path; `too_long`; `timeout` — transient, retried on next sync; `error`). Server-restart failures are not recorded. Browse it under `/lyrical-theology`.
 
 ---
 
@@ -284,12 +306,12 @@ chunks_fts — FTS5 virtual table, auto-synced via 3 triggers
 
 ```bash
 yarn dev            # run with tsx watch (needs cmake + ffmpeg + whisper model on host)
-yarn build          # tsc → dist/
+yarn build          # esbuild → dist/ (fast transpile, no type check)
+yarn typecheck      # tsc --noEmit (full type check)
 yarn start          # node dist/main.js
-yarn test           # vitest run — 58 tests
+yarn test           # vitest run — 60 tests
 yarn test:watch     # vitest in watch mode
 yarn test:coverage  # vitest with v8 coverage report
-yarn typecheck      # tsc --noEmit
 ```
 
 For iterating on code without rebuilding the full Docker image, `yarn dev` is faster — but you need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`).
@@ -307,17 +329,28 @@ Railway uses the `Dockerfile` for builds.
 
 The Whisper model is downloaded during the Docker build step and baked into the image layer. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
 
+### Database backups
+
+When all four R2 variables are configured, Litestream continuously replicates SQLite to the stable `sermons/` prefix in R2. The object names under `sermons/generations/...` are Litestream internals and are not meant to be human-readable.
+
+For visual confidence and manual downloads, the app also writes dated plain SQLite exports:
+
+```text
+archives/sermons-2026-06-08T22-15-00Z.db
+```
+
+These archives are created once on startup and then daily at 03:15 UTC. Litestream remains the primary recovery path for data loss because it restores from snapshots plus WAL files to the latest replicated transaction.
+
 ### Layer caching on rebuilds
 
 Docker layer order is optimised so code-only changes are fast:
 
 ```
-apt-get install cmake...    ← cached forever
-COPY package.json yarn.lock ← cached until deps change
-RUN yarn install            ← cached until yarn.lock changes (compiles whisper.cpp + sqlite)
-RUN wget whisper model      ← cached until yarn.lock changes
-COPY . .                    ← invalidated on every code change
-RUN yarn build              ← only this re-runs for code changes (~seconds)
+apt-get install build-essential...  ← cached forever
+COPY package.json yarn.lock         ← cached until deps change
+RUN yarn install                    ← cached until yarn.lock changes (compiles better-sqlite3)
+COPY . .                            ← invalidated on every code change
+RUN yarn build                      ← only this re-runs for code changes (~seconds)
 ```
 
 ---
