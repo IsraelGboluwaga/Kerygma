@@ -195,8 +195,8 @@ export default function ChatPage() {
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-shrink-0 items-center justify-between border-b border-line bg-black px-4 py-3 sm:px-6">
-        <div className="flex-1 text-center">
-          <img className="mx-auto block h-7 w-auto" src="/assets/cci_logo.svg" alt="AI Library" />
+        <div className="flex-1 text-left sm:text-center">
+          <img className="block h-7 w-auto sm:mx-auto" src="/assets/cci_logo.svg" alt="AI Library" />
           <div className="mt-1 text-[0.72rem] uppercase tracking-[0.06em] text-ink-faint">AI Library</div>
         </div>
         <div className="flex items-center gap-2">

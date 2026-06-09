@@ -31,9 +31,14 @@
     @apply bg-surface border border-line rounded-lg p-6;
   }
 
+  /*
+   * `text-base` (16px) on mobile prevents iOS Safari from auto-zooming the
+   * viewport when a field gains focus — it only zooms when the font-size is
+   * below 16px. Desktop (sm+) keeps the tighter 14px look.
+   */
   .field {
     @apply bg-surface-sunken text-white border border-line-strong rounded-md
-      px-3 py-2 text-sm outline-none transition-colors focus:border-accent
+      px-3 py-2 text-base sm:text-sm outline-none transition-colors focus:border-accent
       placeholder:text-ink-ghost;
   }
 
