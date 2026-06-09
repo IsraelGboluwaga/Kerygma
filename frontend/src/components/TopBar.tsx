@@ -1,8 +1,24 @@
 import type { ReactNode } from 'react'
+import ThemeToggle from './ThemeToggle'
+import { useNav } from '../contexts/NavContext'
+
+function HamburgerIcon() {
+  return (
+    <svg
+      width="20" height="20" viewBox="0 0 20 20"
+      fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <line x1="2.5" y1="5" x2="17.5" y2="5" />
+      <line x1="2.5" y1="10" x2="17.5" y2="10" />
+      <line x1="2.5" y1="15" x2="17.5" y2="15" />
+    </svg>
+  )
+}
 
 /**
- * Shared top bar: logo, a divider, an uppercase subtitle, and an optional slot
- * on the right (links/actions). Mirrors the `.top-bar` look from the old pages.
+ * Shared top bar: logo, divider, subtitle, optional right slot (hidden on
+ * mobile), theme toggle (always), and hamburger (mobile only).
  */
 export default function TopBar({
   subtitle,
@@ -11,10 +27,12 @@ export default function TopBar({
   subtitle: string
   right?: ReactNode
 }) {
+  const { open } = useNav()
+
   return (
-    <div className="flex items-center gap-4 border-b border-line bg-black px-6 py-3">
+    <div className="flex items-center gap-4 border-b border-line bg-bg px-6 py-3">
       <img
-        className="block h-[22px] w-auto"
+        className="block h-[22px] w-auto logo-inv"
         src="/assets/cci_logo.svg"
         alt="logo"
         onError={(e) => {
@@ -25,7 +43,24 @@ export default function TopBar({
       <div className="text-[0.78rem] uppercase tracking-[0.04em] text-ink-faint">
         {subtitle}
       </div>
-      {right && <div className="ml-auto flex items-center gap-3">{right}</div>}
+
+      <div className="ml-auto flex items-center gap-2">
+        {/* Desktop right slot — hidden on mobile */}
+        {right && (
+          <div className="hidden items-center gap-3 sm:flex">{right}</div>
+        )}
+
+        <ThemeToggle />
+
+        {/* Hamburger — mobile only */}
+        <button
+          className="flex items-center justify-center rounded-md border border-line-strong p-1.5 text-ink-dim transition-colors hover:border-accent hover:text-ink-bright sm:hidden"
+          aria-label="Open navigation menu"
+          onClick={open}
+        >
+          <HamburgerIcon />
+        </button>
+      </div>
     </div>
   )
 }

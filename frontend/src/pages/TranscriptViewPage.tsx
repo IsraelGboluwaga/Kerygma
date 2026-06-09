@@ -2,6 +2,22 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getTranscript, ApiError } from '../api/client'
 import type { TranscriptView } from '../api/types'
+import ThemeToggle from '../components/ThemeToggle'
+import { useNav } from '../contexts/NavContext'
+
+function HamburgerIcon() {
+  return (
+    <svg
+      width="20" height="20" viewBox="0 0 20 20"
+      fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <line x1="2.5" y1="5" x2="17.5" y2="5" />
+      <line x1="2.5" y1="10" x2="17.5" y2="10" />
+      <line x1="2.5" y1="15" x2="17.5" y2="15" />
+    </svg>
+  )
+}
 
 function clockStamp(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds))
@@ -22,6 +38,7 @@ function paragraphs(transcript: string): string[] {
 }
 
 export default function TranscriptViewPage() {
+  const { open } = useNav()
   const { videoId } = useParams<{ videoId: string }>()
   const [data, setData] = useState<TranscriptView | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -56,7 +73,7 @@ export default function TranscriptViewPage() {
   if (error) {
     return (
       <div className="flex min-h-full flex-col items-center justify-center gap-3 text-center">
-        <p className="text-[#ef8888]">{error}</p>
+        <p className="text-err-text">{error}</p>
         <Link to="/transcripts" className="btn-ghost">
           ‹ Transcripts
         </Link>
@@ -74,20 +91,30 @@ export default function TranscriptViewPage() {
 
   return (
     <div className="min-h-full">
-      <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-line bg-black px-4 py-3 sm:px-6">
+      <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-line bg-bg px-4 py-3 sm:px-6">
         <Link to="/transcripts" className="btn-ghost whitespace-nowrap">
           ‹ Transcripts
         </Link>
-        <a
-          href={`/transcripts/${sermon.videoId}/download`}
-          className="btn-primary whitespace-nowrap"
-        >
-          Download PDF
-        </a>
+        <div className="flex items-center gap-2">
+          <a
+            href={`/transcripts/${sermon.videoId}/download`}
+            className="btn-primary whitespace-nowrap"
+          >
+            Download PDF
+          </a>
+          <ThemeToggle />
+          <button
+            className="flex items-center justify-center rounded-md border border-line-strong p-1.5 text-ink-dim transition-colors hover:border-accent hover:text-ink-bright sm:hidden"
+            aria-label="Open navigation menu"
+            onClick={open}
+          >
+            <HamburgerIcon />
+          </button>
+        </div>
       </header>
 
       <main className="mx-auto max-w-[760px] px-5 pb-16 pt-7">
-        <h1 className="text-2xl font-bold leading-tight text-white">{sermon.title}</h1>
+        <h1 className="text-2xl font-bold leading-tight text-ink-bright">{sermon.title}</h1>
         {meta && <div className="mt-2 text-[0.85rem] text-ink-dim">{meta}</div>}
         <hr className="my-6 border-line" />
 
