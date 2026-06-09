@@ -169,8 +169,14 @@ upstream `themeId`) and the sermon stores the resulting `themes.id` as `theme_id
 ### `src/scheduler.ts`
 On startup, calls `syncFromApi()` immediately so a fresh deploy doesn't wait up to 10 hours for
 the first batch. Then registers a `node-cron` job: every 10 hours for the first 4 days, then
-Tue + Fri at 06:00 (`'0 6 * * 2,5'`) for ongoing syncs. The phase switch is handled via a
-`setTimeout` that stops the frequent task and starts the weekly one.
+daily at 06:00 (`'0 6 * * *'`) for ongoing syncs. The phase switch is handled via a
+`setTimeout` that stops the frequent task and starts the daily one.
+
+`syncFromApi` enqueues every sermon from the API except those already fully ingested
+(`ingestion_status === 'done'`). Partial rows (status `transcribed` — e.g. a prior chunking
+failure) are re-enqueued so they resume from the stored transcript via `ingestSermon`'s resume
+path, instead of being skipped forever. This is what lets a failed chunking auto-heal on the next
+sync rather than needing a manual re-ingest.
 Calls `fetchAllSermons()` and enqueues any sermon whose `videoId` doesn't exist in the DB yet.
 Stops enqueueing if `getQueueDepth() >= 500` to avoid runaway growth.
 Also exports `syncFromApi(anthropic)` for use by the manual `POST /admin/sync-api` endpoint.
@@ -276,7 +282,7 @@ Sequential startup:
 2. `loadEmbedder()` — warm up the embedding model
 3. Raw `http.createServer()` — `/mcp` dispatches to a fresh `McpServer` per request;
    everything else passes through `getRequestListener(app.fetch)` (Hono)
-4. `startScheduler(anthropic)` — registers cron job (every 10 h for 4 days, then Tue + Fri 06:00)
+4. `startScheduler(anthropic)` — registers cron job (every 10 h for 4 days, then daily 06:00)
 5. `SIGTERM` / `SIGINT` handlers — wait for the active job to finish before exiting
 
 ---

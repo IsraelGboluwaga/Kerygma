@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { logger } from './logger.js'
 import { errMsg } from './utils.js'
 import { enqueue, getQueueDepth } from './queue.js'
-import { getSermonByVideoId, getConfig, setConfig } from './db/queries.js'
+import { getSermonByVideoId, getMissingVideoIdsByKind, getConfig, setConfig } from './db/queries.js'
 import { fetchAllSermons } from './ingestion/api-source.js'
 import { ingestSermon } from './ingestion/pipeline.js'
 
@@ -14,9 +14,23 @@ export async function syncFromApi(anthropic: Anthropic): Promise<void> {
   let enqueued = 0
   let skipped = 0
 
+  // Sermons already recorded as having no audio will fail the same way every
+  // run, so skip them rather than re-enqueuing a doomed job each sync.
+  const noAudioIds = getMissingVideoIdsByKind('no_audio')
+
   try {
     for await (const req of fetchAllSermons()) {
-      if (req.videoId && getSermonByVideoId(req.videoId)) {
+      if (req.videoId && noAudioIds.has(req.videoId)) {
+        skipped++
+        continue
+      }
+
+      // Skip only fully-ingested sermons. A partial row (ingestion_status
+      // 'transcribed' — e.g. a prior chunking failure) is re-enqueued so it
+      // resumes from the stored transcript instead of being stranded forever;
+      // ingestSermon's resume path skips the re-download + transcription.
+      const existing = req.videoId ? getSermonByVideoId(req.videoId) : null
+      if (existing && existing.ingestion_status === 'done') {
         skipped++
         continue
       }
@@ -45,11 +59,11 @@ export async function syncFromApi(anthropic: Anthropic): Promise<void> {
 const FREQUENT_UNTIL_KEY = 'scheduler_frequent_until'
 const FOUR_DAYS_MS = 4 * 24 * 60 * 60 * 1000
 
-function startWeeklyCron(anthropic: Anthropic): void {
-  cron.schedule('0 6 * * 2,5', () => {
+function startDailyCron(anthropic: Anthropic): void {
+  cron.schedule('0 6 * * *', () => {
     void syncFromApi(anthropic)
   })
-  logger.info('Scheduler updated — syncing Tue + Fri at 06:00')
+  logger.info('Scheduler updated — syncing daily at 06:00')
 }
 
 export function startScheduler(anthropic: Anthropic): void {
@@ -64,7 +78,7 @@ export function startScheduler(anthropic: Anthropic): void {
   const remainingMs = deadline - Date.now()
 
   if (remainingMs <= 0) {
-    startWeeklyCron(anthropic)
+    startDailyCron(anthropic)
     return
   }
 
@@ -76,6 +90,6 @@ export function startScheduler(anthropic: Anthropic): void {
 
   setTimeout(() => {
     frequentTask.stop()
-    startWeeklyCron(anthropic)
+    startDailyCron(anthropic)
   }, remainingMs)
 }
