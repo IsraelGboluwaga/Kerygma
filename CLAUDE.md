@@ -11,8 +11,6 @@ yarn add -D <pkg>     # add a dev dependency
 yarn remove <pkg>     # remove a dependency
 ```
 
-The one exception: `npx nodejs-whisper download` is the upstream-prescribed way to compile whisper.cpp and download the model — use it as-is.
-
 ---
 
 ## Common commands
@@ -148,8 +146,8 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - The test setup file is `tests/setup.ts`; add shared env stubs there.
 
 ### Docker
-- Layer order matters for cache efficiency: `apt-get` → `yarn install` → model download → `COPY . .` → `yarn build`. Do not reorder.
-- Use `--build-arg WHISPER_MODEL=<name>` to switch models at build time.
+- Layer order matters for cache efficiency: `apt-get` → `yarn install` → `COPY . .` → `yarn build`. Do not reorder.
+- Transcription uses the OpenAI Whisper API (`whisper-1`), not a local model — there is no model to download or compile at build time. `ffmpeg` is bundled only to compress audio over 25 MB before upload.
 
 ---
 

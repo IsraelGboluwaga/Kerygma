@@ -17,7 +17,7 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 
 - **React + Vite SPA** — chat, transcripts, admin, live status, and DB browser as one mobile-responsive single-page app (Tailwind), installable as a **PWA** with an offline app shell
 - **Web admin UI** — paste an MP3 URL, submit, watch the job complete
-- **Whisper transcription** — local speech-to-text via nodejs-whisper
+- **Whisper transcription** — speech-to-text via the OpenAI Whisper API (`whisper-1`)
 - **Claude chunking** — sermon divided into named sections with timestamps, topics, and summaries
 - **FTS5 full-text search** — fast keyword search across all indexed content
 - **Transcripts page** — `/transcripts` finds sermons by date, theme, or keyword (natural-language or structured filters) and delivers viewable transcripts + on-demand PDF download
@@ -28,7 +28,7 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 - **Duration limit** — configurable cap to reject overly long files
 - **Speaker disambiguation** — "Apostle" with multiple matches prompts a clarifying list
 - **Nearest-date fallback** — suggests the closest sermon when an exact date has no results
-- **Docker-first** — multi-stage image bundles whisper.cpp, ffmpeg, and the model; no host toolchain needed
+- **Docker-first** — multi-stage image bundles ffmpeg; no host toolchain needed
 - **Railway/Render ready** — single process, persistent SQLite volume
 
 ---
@@ -56,7 +56,7 @@ Hono HTTP Server (:3000)
          │
     Ingestion Pipeline
          ├── Download MP3 → temp file
-         ├── nodejs-whisper → transcript segments
+         ├── OpenAI Whisper API → transcript segments
          ├── Claude → semantic chunks
          ├── @xenova/transformers → embedding per chunk
          └── better-sqlite3 → sermons + chunks
@@ -86,7 +86,7 @@ kerygma/
 │   │   └── queries.ts             # Typed query functions
 │   ├── ingestion/
 │   │   ├── downloader.ts          # HTTP MP3 → temp file
-│   │   ├── transcriber.ts         # nodejs-whisper → TranscriptSegment[]
+│   │   ├── transcriber.ts         # OpenAI Whisper API → TranscriptSegment[]
 │   │   ├── chunker.ts             # Claude chunking + validateChunks + formatTimestamp
 │   │   ├── embedder.ts            # @xenova/transformers singleton (all-MiniLM-L6-v2)
 │   │   └── pipeline.ts            # Orchestrates full ingest (with retry resume)
@@ -137,8 +137,9 @@ kerygma/
 
 - Docker
 - Anthropic API key ([console.anthropic.com](https://console.anthropic.com/))
+- OpenAI API key ([platform.openai.com](https://platform.openai.com/)) — used for Whisper transcription
 
-Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg, and the Whisper model download. No host toolchain required.
+Docker handles everything else: Node 20 and ffmpeg (used to compress audio over 25 MB before upload to the Whisper API). No host toolchain required.
 
 ### Docker (recommended)
 
@@ -326,7 +327,7 @@ yarn test:watch     # vitest in watch mode
 yarn test:coverage  # vitest with v8 coverage report
 ```
 
-`yarn dev` runs the frontend on `http://localhost:5173` (which proxies API calls to the backend on `:3000`) — open that URL while developing. For the backend you still need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`). The React frontend lives in `frontend/` as a yarn workspace, so a single `yarn install` at the repo root installs everything.
+`yarn dev` runs the frontend on `http://localhost:5173` (which proxies API calls to the backend on `:3000`) — open that URL while developing. For the backend you need ffmpeg installed on your machine (`brew install ffmpeg`) — it compresses audio over 25 MB before upload to the Whisper API. The React frontend lives in `frontend/` as a yarn workspace, so a single `yarn install` at the repo root installs everything.
 
 ---
 
@@ -339,7 +340,7 @@ Railway uses the `Dockerfile` for builds.
 3. Set environment variables (see Configuration above), with `DB_PATH=/data/sermons.db`
 4. Push to the connected branch — Railway builds the Docker image automatically
 
-The Whisper model is downloaded during the Docker build step and baked into the image layer. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
+Transcription runs on the OpenAI Whisper API, so nothing is downloaded at build time for it. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
 
 ### Database backups
 
@@ -394,6 +395,6 @@ No sermon was ingested for that exact date. The app will suggest the closest ava
 
 ---
 
-**Built with:** TypeScript, Hono, better-sqlite3, nodejs-whisper, @xenova/transformers, Claude AI, @modelcontextprotocol/sdk
+**Built with:** TypeScript, Hono, better-sqlite3, OpenAI Whisper API, @xenova/transformers, Claude AI, @modelcontextprotocol/sdk
 
 **Kerygma** (κήρυγμα) — making the preached word searchable and accessible to your congregation.

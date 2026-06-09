@@ -2,8 +2,6 @@ services:
   kerygma:
     build:
       context: .
-      args:
-        WHISPER_MODEL: ${WHISPER_MODEL:-medium.en}
     ports:
       - "${HOST_PORT:-3000}:3000"
     env_file: .env
@@ -12,7 +10,6 @@ services:
       - PORT=3000
       - DB_PATH=/app/data/sermons.db
       - XENOVA_CACHE=/app/data/models
-      - WHISPER_MODEL=${WHISPER_MODEL:-medium.en}
     volumes:
       - ./data:/app/data
     restart: unless-stopped

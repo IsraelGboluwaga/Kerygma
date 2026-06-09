@@ -5,9 +5,6 @@
 node_modules/
 package-lock.json
 
-# Whisper model weights
-node_modules/nodejs-whisper/cpp/whisper.cpp/models/*.bin
-
 # Build output
 dist/
 public/app/
