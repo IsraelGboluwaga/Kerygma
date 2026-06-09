@@ -52,17 +52,19 @@ describe('transcripts routes', () => {
     initDatabase(':memory:')
   })
 
-  it('GET /transcripts serves the page', async () => {
-    const app = createRouter(stubAnthropic)
-    const res = await app.request('/transcripts')
-    expect(res.status).toBe(200)
-    expect(await res.text()).toContain('Transcripts')
-  })
-
-  it('GET /transcripts/search (structured theme) returns matching rows', async () => {
+  it('GET /api/themes returns the theme list', async () => {
     seed()
     const app = createRouter(stubAnthropic)
-    const res = await app.request('/transcripts/search?theme=faith')
+    const res = await app.request('/api/themes')
+    expect(res.status).toBe(200)
+    const themes = await res.json()
+    expect(themes.map((t: { name: string }) => t.name)).toContain('Faith')
+  })
+
+  it('GET /api/transcripts/search (structured theme) returns matching rows', async () => {
+    seed()
+    const app = createRouter(stubAnthropic)
+    const res = await app.request('/api/transcripts/search?theme=faith')
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.sermons).toHaveLength(1)
@@ -72,7 +74,7 @@ describe('transcripts routes', () => {
     expect(body.sermons[0].downloadUrl).toBe('/transcripts/seed-vid-0001/download')
   })
 
-  it('GET /transcripts/search (topic) returns sermons about the subject', async () => {
+  it('GET /api/transcripts/search (topic) returns sermons about the subject', async () => {
     seed()
     // A sermon that merely mentions "faith" in content but is not about it.
     const id = saveSermon({
@@ -93,28 +95,30 @@ describe('transcripts routes', () => {
     ])
 
     const app = createRouter(stubAnthropic)
-    const body = await (await app.request('/transcripts/search?topic=faith')).json()
+    const body = await (await app.request('/api/transcripts/search?topic=faith')).json()
     expect(body.sermons.map((s: { title: string }) => s.title)).toEqual(['Walking By Faith'])
     expect(body.interpreted).toContain('about')
   })
 
-  it('GET /transcripts/search (structured date) filters by month/year', async () => {
+  it('GET /api/transcripts/search (structured date) filters by month/year', async () => {
     seed()
     const app = createRouter(stubAnthropic)
-    const hit = await (await app.request('/transcripts/search?year=2023&month=02')).json()
+    const hit = await (await app.request('/api/transcripts/search?year=2023&month=02')).json()
     expect(hit.sermons).toHaveLength(1)
-    const miss = await (await app.request('/transcripts/search?year=2024&month=01')).json()
+    const miss = await (await app.request('/api/transcripts/search?year=2024&month=01')).json()
     expect(miss.sermons).toHaveLength(0)
   })
 
-  it('GET /transcripts/:videoId renders the transcript view', async () => {
+  it('GET /api/transcripts/:videoId returns the transcript as JSON', async () => {
     const videoId = seed()
     const app = createRouter(stubAnthropic)
-    const res = await app.request(`/transcripts/${videoId}`)
+    const res = await app.request(`/api/transcripts/${videoId}`)
     expect(res.status).toBe(200)
-    const html = await res.text()
-    expect(html).toContain('Walking By Faith')
-    expect(html).toContain('Faith is trust.')
+    const body = await res.json()
+    expect(body.sermon.title).toBe('Walking By Faith')
+    expect(body.sermon.dateFormatted).toBe('12 February 2023')
+    expect(body.hasTranscript).toBe(true)
+    expect(body.segments.map((s: { text: string }) => s.text)).toContain('Faith is trust.')
   })
 
   it('GET /transcripts/:videoId/download streams a PDF', async () => {
@@ -130,9 +134,9 @@ describe('transcripts routes', () => {
     expect(buf.subarray(0, 4).toString('ascii')).toBe('%PDF')
   })
 
-  it('GET /transcripts/:videoId returns 404 for an unknown id', async () => {
+  it('GET /api/transcripts/:videoId returns 404 for an unknown id', async () => {
     const app = createRouter(stubAnthropic)
-    const res = await app.request('/transcripts/does-not-exist')
+    const res = await app.request('/api/transcripts/does-not-exist')
     expect(res.status).toBe(404)
     // ensure "search" is not captured as a video id
     expect(getSermonByVideoId('search')).toBeNull()

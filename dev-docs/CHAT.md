@@ -14,10 +14,10 @@ The chat is **agentic**: instead of pre-running one search and stuffing the resu
 
 ### 1. User sends a message
 
-The frontend (`src/web/chatHtml.ts`) maintains a `messages` array in memory for the duration of the session. When the user submits:
+The frontend (`frontend/src/pages/ChatPage.tsx`) keeps the conversation in React state for the duration of the session. When the user submits:
 
-- The message is appended to `messages` as `{ role: 'user', content: text }`
-- The entire `messages` array is POST'd to `/`
+- The message is appended as `{ role: 'user', content: text }`
+- The entire conversation is POST'd to `/api/chat` via `streamChat()` (`frontend/src/api/client.ts`)
 - A typing indicator appears while waiting
 
 ### 2. Backend sets up the agentic loop
@@ -74,12 +74,12 @@ Claude is called with:
 
 ### 6. Frontend renders the response
 
-`readStream()` in `chatHtml.ts` reads the SSE stream:
+`ChatPage` consumes the `streamChat()` async generator, which parses the SSE frames:
 
-- On `context` — stores sources and calls `applySources()` to attach/refresh the `<details>` (works even if the bubble already exists)
-- On `delta` — creates the assistant bubble on first token, then appends text incrementally (streaming effect)
-- On `done` — pushes the completed assistant message to the `messages` array for future turns
-- On `error` — removes the typing indicator and shows an error banner
+- On `context` — stores sources on the current assistant turn; the `<details>` attaches/refreshes even if it arrives before the answer text
+- On `delta` — the assistant bubble replaces the typing dots on the first token, then markdown (`marked`) re-renders incrementally as text accumulates
+- On `done` — the turn is marked complete and stays in state for future turns
+- On `error` — drops the empty assistant placeholder and shows an error banner
 
 Sources appear as a collapsible `<details>` element below the response bubble, showing sermon title, date, and (for excerpts) timestamp. The `section_name` from the chunk is not surfaced in the Sources widget — only the sermon-level metadata is shown.
 
@@ -89,7 +89,7 @@ Sources appear as a collapsible `<details>` element below the response bubble, s
 
 The entire conversation history is kept client-side and sent to the backend on every request. There is no server-side session. This means:
 
-- Conversation context is lost on page refresh (by design — the "New conversation" button does a `location.reload()`)
+- Conversation context is lost on page refresh (by design — the "New" button clears the in-memory conversation)
 - Claude can reference earlier exchanges in follow-up answers
 - Each turn independently re-runs the agentic loop and re-queries the DB, so answers always reflect the current library — and "that month/series" references resolve from the conversation before the tool call
 
@@ -109,6 +109,7 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
 | Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
 | Max tokens per Claude turn | 3072 | `router.ts` → `max_tokens: 3072` |
+| Chat rate limit | 30 req/min per IP | `router.ts` → `POST /api/chat` |
 | Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
 
 Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because it groups results by sermon and presents them structured rather than as a synthesised narrative.
@@ -119,8 +120,9 @@ Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because
 
 | File | Role |
 |------|------|
-| `src/web/chatHtml.ts` | Frontend UI, SSE parsing, message rendering, `applySources()` |
-| `src/web/router.ts` | `POST /` handler, agentic loop, `CHAT_TOOLS`, `runChatTool()` |
+| `frontend/src/pages/ChatPage.tsx` | Chat UI, message rendering, streaming bubbles, sources `<details>` |
+| `frontend/src/api/client.ts` | `streamChat()` — SSE reader / async generator of chat events |
+| `src/web/router.ts` | `POST /api/chat` handler, agentic loop, `CHAT_TOOLS`, `runChatTool()` |
 | `src/db/queries.ts` | `searchChunks()`, `getSermonsByDate()`, `sanitizeFtsQuery()`, FTS5 query |
 | `src/ingestion/chunker.ts` | `formatTimestamp()` used in context headers |
 | `src/logger.ts` | Runtime logging (Winston) |

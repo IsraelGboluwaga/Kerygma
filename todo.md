@@ -17,7 +17,6 @@
 - Rewrite `src/ingestion/transcriber.ts` to call `POST https://api.openai.com/v1/audio/transcriptions` with `response_format: verbose_json`
 - Map the response `segments` array to the existing `TranscriptSegment[]` shape
 - Return the full verbatim `text` alongside segments so the pipeline can store it
-- Remove `nodejs-whisper` dependency
 - Add `OPENAI_API_KEY` to required env vars in `src/config.ts`
 
 ### 3. Store verbatim transcripts

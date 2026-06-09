@@ -15,8 +15,9 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 
 ### Features
 
+- **React + Vite SPA** — chat, transcripts, admin, live status, and DB browser as one mobile-responsive single-page app (Tailwind), installable as a **PWA** with an offline app shell
 - **Web admin UI** — paste an MP3 URL, submit, watch the job complete
-- **Whisper transcription** — local speech-to-text via nodejs-whisper
+- **Whisper transcription** — speech-to-text via the OpenAI Whisper API (`whisper-1`)
 - **Claude chunking** — sermon divided into named sections with timestamps, topics, and summaries
 - **FTS5 full-text search** — fast keyword search across all indexed content
 - **Transcripts page** — `/transcripts` finds sermons by date, theme, or keyword (natural-language or structured filters) and delivers viewable transcripts + on-demand PDF download
@@ -27,7 +28,7 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 - **Duration limit** — configurable cap to reject overly long files
 - **Speaker disambiguation** — "Apostle" with multiple matches prompts a clarifying list
 - **Nearest-date fallback** — suggests the closest sermon when an exact date has no results
-- **Docker-first** — multi-stage image bundles whisper.cpp, ffmpeg, and the model; no host toolchain needed
+- **Docker-first** — multi-stage image bundles ffmpeg; no host toolchain needed
 - **Railway/Render ready** — single process, persistent SQLite volume
 
 ---
@@ -35,28 +36,27 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 ## Architecture
 
 ```
-Browser (Admin)
-    │  POST /admin/ingest
+Browser → React SPA (public/app, client-side routes: /, /transcripts, /admin, …)
     ▼
 Hono HTTP Server (:3000)
-    ├── GET  /admin             → Admin form (password-gated)
-    ├── GET  /admin/status      → Live status dashboard
-    ├── POST /admin/ingest      → Enqueue job → 202 + jobId
-    ├── GET  /admin/jobs        → Recent job statuses
-    ├── GET  /admin/jobs/:id    → Poll single job
-    ├── GET  /admin/status/data → Live queue + phase snapshot
-    ├── GET  /                  → Chat UI
-    ├── GET  /transcripts       → Transcripts search + table
-    ├── GET  /transcripts/search          → Date/theme/keyword results (JSON)
-    ├── GET  /transcripts/:id             → Viewable transcript
+    ├── POST /api/chat                    → Agentic chat (SSE stream)
+    ├── GET  /api/themes                  → Theme list for filters (JSON)
+    ├── GET  /api/transcripts/search      → Date/theme/keyword results (JSON)
+    ├── GET  /api/transcripts/:id         → Viewable transcript (JSON)
     ├── GET  /transcripts/:id/download    → Transcript PDF
-    └── GET  /health            → { ok: true }
+    ├── GET  /api/admin/status            → Stats snapshot          (X-Admin-Secret)
+    ├── POST /api/admin/sync-api          → Trigger background sync (X-Admin-Secret)
+    ├── GET  /api/admin/jobs              → Recent job statuses     (X-Admin-Secret)
+    ├── GET  /api/admin/status/data       → Live queue + phase      (X-Admin-Secret)
+    ├── GET  /api/db/:table               → Paginated table rows    (X-Admin-Secret)
+    ├── GET  /health                      → { ok: true }
+    └── GET  *                            → SPA static files / index.html fallback
          │
     In-process job queue (sequential)
          │
     Ingestion Pipeline
          ├── Download MP3 → temp file
-         ├── nodejs-whisper → transcript segments
+         ├── OpenAI Whisper API → transcript segments
          ├── Claude → semantic chunks
          ├── @xenova/transformers → embedding per chunk
          └── better-sqlite3 → sermons + chunks
@@ -86,22 +86,29 @@ kerygma/
 │   │   └── queries.ts             # Typed query functions
 │   ├── ingestion/
 │   │   ├── downloader.ts          # HTTP MP3 → temp file
-│   │   ├── transcriber.ts         # nodejs-whisper → TranscriptSegment[]
+│   │   ├── transcriber.ts         # OpenAI Whisper API → TranscriptSegment[]
 │   │   ├── chunker.ts             # Claude chunking + validateChunks + formatTimestamp
 │   │   ├── embedder.ts            # @xenova/transformers singleton (all-MiniLM-L6-v2)
 │   │   └── pipeline.ts            # Orchestrates full ingest (with retry resume)
 │   ├── mcp/
 │   │   └── server.ts              # 4 MCP tool registrations
 │   └── web/
-│       ├── router.ts              # Hono app — chat, admin, status, and health routes
-│       ├── adminHtml.ts           # Admin form HTML (password-gated, live job polling)
-│       ├── statusHtml.ts          # Live ingestion status dashboard (phase stepper + queue)
-│       ├── chatHtml.ts            # Streaming chat UI (SSE, Sources widget)
-│       ├── transcriptsHtml.ts     # Transcripts search page (NL + structured filters, responsive table)
-│       ├── transcriptViewHtml.ts  # Single viewable transcript (timestamped segments)
+│       ├── router.ts              # Hono app — /api/* JSON+SSE, PDF download, SPA serving
 │       ├── transcriptPdf.ts       # pdfkit PDF generator + filename builder
 │       ├── transcriptQuery.ts     # Claude NL → { date, theme, speaker } filter parser
 │       └── transcriptFormat.ts    # Shared date/slug formatting helpers
+├── frontend/                      # React + Vite SPA (TypeScript + Tailwind)
+│   ├── vite.config.ts             # Build → ../public/app; dev proxy → :3000
+│   ├── tailwind.config.ts         # Design tokens (dark theme, red accent)
+│   └── src/
+│       ├── App.tsx                # react-router routes for all pages
+│       ├── api/                   # Typed fetch client + SSE chat reader + response types
+│       ├── components/            # Shared TopBar, Badge
+│       ├── lib/                   # Formatting + useAdminSecret (sessionStorage)
+│       └── pages/                 # Chat, Transcripts, TranscriptView, Admin, LiveStatus, DbBrowser
+├── public/
+│   ├── assets/                    # Logos/icons served at /assets
+│   └── app/                       # Vite build output (gitignored, created by yarn build:web)
 ├── tests/
 │   ├── setup.ts                   # Env vars for test context
 │   ├── db.test.ts                 # Storage layer (26 tests)
@@ -130,8 +137,9 @@ kerygma/
 
 - Docker
 - Anthropic API key ([console.anthropic.com](https://console.anthropic.com/))
+- OpenAI API key ([platform.openai.com](https://platform.openai.com/)) — used for Whisper transcription
 
-Docker handles everything else: Node 20, cmake, whisper.cpp compilation, ffmpeg, and the Whisper model download. No host toolchain required.
+Docker handles everything else: Node 20 and ffmpeg (used to compress audio over 25 MB before upload to the Whisper API). No host toolchain required.
 
 ### Docker (recommended)
 
@@ -305,16 +313,21 @@ missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, 
 ## Development
 
 ```bash
-yarn dev            # run with tsx watch (needs cmake + ffmpeg + whisper model on host)
-yarn build          # esbuild → dist/ (fast transpile, no type check)
-yarn typecheck      # tsc --noEmit (full type check)
+yarn dev            # run backend (tsx watch) + Vite dev server together (concurrently)
+yarn dev:server     # backend only (tsx watch src/main.ts)
+yarn dev:web        # Vite dev server only (:5173, proxies /api to :3000)
+yarn build          # build the SPA (→ public/app) and the backend (→ dist)
+yarn build:web      # Vite build only
+yarn build:server   # esbuild backend only (fast transpile, no type check)
+yarn typecheck      # tsc --noEmit (backend)
+yarn typecheck:web  # tsc --noEmit (frontend)
 yarn start          # node dist/main.js
-yarn test           # vitest run — 60 tests
+yarn test           # vitest run
 yarn test:watch     # vitest in watch mode
 yarn test:coverage  # vitest with v8 coverage report
 ```
 
-For iterating on code without rebuilding the full Docker image, `yarn dev` is faster — but you need cmake and ffmpeg installed on your machine (`brew install cmake ffmpeg`) and the Whisper model compiled (`npx nodejs-whisper download`).
+`yarn dev` runs the frontend on `http://localhost:5173` (which proxies API calls to the backend on `:3000`) — open that URL while developing. For the backend you need ffmpeg installed on your machine (`brew install ffmpeg`) — it compresses audio over 25 MB before upload to the Whisper API. The React frontend lives in `frontend/` as a yarn workspace, so a single `yarn install` at the repo root installs everything.
 
 ---
 
@@ -327,7 +340,7 @@ Railway uses the `Dockerfile` for builds.
 3. Set environment variables (see Configuration above), with `DB_PATH=/data/sermons.db`
 4. Push to the connected branch — Railway builds the Docker image automatically
 
-The Whisper model is downloaded during the Docker build step and baked into the image layer. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
+Transcription runs on the OpenAI Whisper API, so nothing is downloaded at build time for it. The embedding model (~90MB) is downloaded on first cold start and cached in `$HOME/.cache`.
 
 ### Database backups
 
@@ -347,10 +360,10 @@ Docker layer order is optimised so code-only changes are fast:
 
 ```
 apt-get install build-essential...  ← cached forever
-COPY package.json yarn.lock         ← cached until deps change
-RUN yarn install                    ← cached until yarn.lock changes (compiles better-sqlite3)
+COPY package.json yarn.lock + frontend/package.json  ← workspace manifests
+RUN yarn install                    ← cached until a manifest changes (compiles better-sqlite3)
 COPY . .                            ← invalidated on every code change
-RUN yarn build                      ← only this re-runs for code changes (~seconds)
+RUN yarn build                      ← Vite SPA + esbuild backend (~seconds)
 ```
 
 ---
@@ -382,6 +395,6 @@ No sermon was ingested for that exact date. The app will suggest the closest ava
 
 ---
 
-**Built with:** TypeScript, Hono, better-sqlite3, nodejs-whisper, @xenova/transformers, Claude AI, @modelcontextprotocol/sdk
+**Built with:** TypeScript, Hono, better-sqlite3, OpenAI Whisper API, @xenova/transformers, Claude AI, @modelcontextprotocol/sdk
 
 **Kerygma** (κήρυγμα) — making the preached word searchable and accessible to your congregation.
