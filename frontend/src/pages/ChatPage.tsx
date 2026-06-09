@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { marked } from 'marked'
 import { streamChat } from '../api/client'
-import type { ChatMessage } from '../api/types'
+import type { ChatMessage, ChatSource } from '../api/types'
 import ThemeToggle from '../components/ThemeToggle'
 import { useNav } from '../contexts/NavContext'
 import { useConversations, type Conversation } from '../contexts/ConversationsContext'
@@ -42,7 +42,7 @@ function TypingDots() {
   )
 }
 
-function Sources({ sources }: { sources: import('../api/types').ChatSource[] }) {
+function Sources({ sources }: { sources: ChatSource[] }) {
   return (
     <details className="group mt-1.5 text-[0.78rem]">
       <summary className="flex cursor-pointer list-none items-center gap-1 text-ink-faint transition-colors hover:text-ink-dim">

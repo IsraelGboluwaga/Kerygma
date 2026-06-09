@@ -32,7 +32,7 @@ export default function TopBar({
   return (
     <div className="flex items-center gap-4 border-b border-line bg-bg px-6 py-3">
       <img
-        className="block h-[22px] w-auto"
+        className="block h-[22px] w-auto logo-inv"
         src="/assets/cci_logo.svg"
         alt="logo"
         onError={(e) => {
