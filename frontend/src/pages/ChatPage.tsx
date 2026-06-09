@@ -3,6 +3,22 @@ import { Link } from 'react-router-dom'
 import { marked } from 'marked'
 import { streamChat } from '../api/client'
 import type { ChatMessage, ChatSource } from '../api/types'
+import ThemeToggle from '../components/ThemeToggle'
+import { useNav } from '../contexts/NavContext'
+
+function HamburgerIcon() {
+  return (
+    <svg
+      width="20" height="20" viewBox="0 0 20 20"
+      fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <line x1="2.5" y1="5" x2="17.5" y2="5" />
+      <line x1="2.5" y1="10" x2="17.5" y2="10" />
+      <line x1="2.5" y1="15" x2="17.5" y2="15" />
+    </svg>
+  )
+}
 
 interface Turn {
   role: 'user' | 'assistant'
@@ -67,6 +83,7 @@ function Sources({ sources }: { sources: ChatSource[] }) {
 }
 
 export default function ChatPage() {
+  const { open } = useNav()
   const [conversations, setConversations] = useState<Conversation[]>(() => [newConversation()])
   const [activeId, setActiveId] = useState<string>(() => conversations[0].id)
 
@@ -194,23 +211,31 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex flex-shrink-0 items-center justify-between border-b border-line bg-black px-4 py-3 sm:px-6">
+      <header className="flex flex-shrink-0 items-center justify-between border-b border-line bg-bg px-4 py-3 sm:px-6">
         <div className="flex-1 text-left sm:text-center">
-          <img className="block h-7 w-auto sm:mx-auto" src="/assets/cci_logo.svg" alt="AI Library" />
+          <img className="block h-7 w-auto logo-inv sm:mx-auto" src="/assets/cci_logo.svg" alt="AI Library" />
           <div className="mt-1 text-[0.72rem] uppercase tracking-[0.06em] text-ink-faint">AI Library</div>
         </div>
         <div className="flex items-center gap-2">
-          <Link to="/transcripts" className="btn-ghost">
+          <Link to="/transcripts" className="btn-ghost hidden sm:inline-flex">
             Transcripts
           </Link>
-          <button className="btn-ghost" onClick={addConversation}>
+          <button className="btn-ghost hidden sm:inline-flex" onClick={addConversation}>
             New
+          </button>
+          <ThemeToggle />
+          <button
+            className="flex items-center justify-center rounded-md border border-line-strong p-1.5 text-ink-dim transition-colors hover:border-accent hover:text-ink-bright sm:hidden"
+            aria-label="Open navigation menu"
+            onClick={open}
+          >
+            <HamburgerIcon />
           </button>
         </div>
       </header>
 
       {/* In-page conversation tabs */}
-      <div className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-line bg-black px-2 py-1.5">
+      <div className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-line bg-bg px-2 py-1.5">
         {conversations.map((c) => {
           const isActive = c.id === activeId
           return (
@@ -219,8 +244,8 @@ export default function ChatPage() {
               className={[
                 'group flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-[0.8rem] transition-colors',
                 isActive
-                  ? 'border-accent bg-[#1a0808] text-white'
-                  : 'border-line-strong bg-surface text-ink-dim hover:text-white',
+                  ? 'border-accent bg-accent-selected text-ink-bright'
+                  : 'border-line-strong bg-surface text-ink-dim hover:text-ink-bright',
               ].join(' ')}
             >
               <button
@@ -235,7 +260,7 @@ export default function ChatPage() {
               {conversations.length > 1 && (
                 <button
                   aria-label="Close conversation"
-                  className="-mr-0.5 rounded px-0.5 text-ink-faint opacity-60 transition-opacity hover:text-white hover:opacity-100"
+                  className="-mr-0.5 rounded px-0.5 text-ink-faint opacity-60 transition-opacity hover:text-ink-bright hover:opacity-100"
                   onClick={() => closeConversation(c.id)}
                 >
                   ×
@@ -246,7 +271,7 @@ export default function ChatPage() {
         })}
         <button
           aria-label="New conversation"
-          className="flex-shrink-0 rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[0.8rem] text-ink-dim transition-colors hover:text-white"
+          className="flex-shrink-0 rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[0.8rem] text-ink-dim transition-colors hover:text-ink-bright"
           onClick={addConversation}
         >
           +
@@ -286,10 +311,10 @@ export default function ChatPage() {
         )}
       </div>
 
-      <div className="flex-shrink-0 border-t border-line bg-black px-4 py-3.5">
+      <div className="flex-shrink-0 border-t border-line bg-bg px-4 py-3.5">
         <div className="mx-auto flex max-w-[760px] flex-col gap-2">
           {active.error && (
-            <div className="rounded-md border border-accent-muted bg-[#1c0e0e] px-3 py-2 text-[0.83rem] text-[#ef8888]">
+            <div className="rounded-md border border-err-border bg-err-bg px-3 py-2 text-[0.83rem] text-err-text">
               {active.error}
             </div>
           )}
