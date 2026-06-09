@@ -511,6 +511,15 @@ export function listMissingSermons(limit = 50): MissingSermonRow[] {
     .all(limit) as MissingSermonRow[]
 }
 
+/** Video IDs already recorded as missing for the given kind — used by the sync
+ * to skip sermons it knows will fail again (e.g. `no_audio`). */
+export function getMissingVideoIdsByKind(kind: MissingSermonKind): Set<string> {
+  const rows = getDb()
+    .prepare(`SELECT video_id FROM missing_sermons WHERE kind = ?`)
+    .all(kind) as { video_id: string }[]
+  return new Set(rows.map((r) => r.video_id))
+}
+
 /** Removes a missing-sermon entry once it has been successfully ingested. */
 export function removeMissingSermon(videoId: string): void {
   getDb().prepare(`DELETE FROM missing_sermons WHERE video_id = ?`).run(videoId)
