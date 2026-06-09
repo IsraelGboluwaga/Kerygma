@@ -47,17 +47,6 @@ const MIME: Record<string, string> = {
   '.ico': 'image/x-icon',
 }
 
-const ASSETS_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public', 'assets')
-
-const MIME: Record<string, string> = {
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.ico': 'image/x-icon',
-}
-
 // Simple in-memory rate limiter: 30 requests/min per IP on the chat endpoint
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
 const RATE_LIMIT = 30
