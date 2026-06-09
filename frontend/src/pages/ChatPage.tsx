@@ -11,6 +11,28 @@ interface Turn {
   streaming?: boolean
 }
 
+interface Conversation {
+  id: string
+  turns: Turn[]
+  draft: string
+  busy: boolean
+  error: string | null
+}
+
+let convSeq = 0
+function newConversation(): Conversation {
+  convSeq += 1
+  return { id: `c${Date.now()}-${convSeq}`, turns: [], draft: '', busy: false, error: null }
+}
+
+// A short tab label derived from the first user message, or a placeholder.
+function conversationTitle(c: Conversation): string {
+  const firstUser = c.turns.find((t) => t.role === 'user')
+  if (!firstUser) return 'New chat'
+  const text = firstUser.content.trim().replace(/\s+/g, ' ')
+  return text.length > 24 ? `${text.slice(0, 24)}…` : text
+}
+
 function TypingDots() {
   return (
     <div className="flex w-fit items-center gap-1 rounded-2xl rounded-bl-sm border border-line bg-surface-raised px-4 py-3">
@@ -45,24 +67,45 @@ function Sources({ sources }: { sources: ChatSource[] }) {
 }
 
 export default function ChatPage() {
-  const [turns, setTurns] = useState<Turn[]>([])
-  const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [conversations, setConversations] = useState<Conversation[]>(() => [newConversation()])
+  const [activeId, setActiveId] = useState<string>(() => conversations[0].id)
+
+  // Mirror of conversations for stale-free reads inside the async send loop.
+  const convosRef = useRef(conversations)
+  useEffect(() => {
+    convosRef.current = conversations
+  }, [conversations])
 
   const listRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
+  // Track the active id so the async send loop can focus only when relevant.
+  const activeIdRef = useRef(activeId)
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
+
+  const active = conversations.find((c) => c.id === activeId) ?? conversations[0]
+
+  // Scroll to bottom and re-fit the textarea when the active conversation changes.
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
-  }, [turns])
+  }, [active.turns, activeId])
 
-  function updateLast(partial: Partial<Turn>) {
-    setTurns((prev) => {
-      const copy = [...prev]
-      const i = copy.length - 1
-      if (i >= 0) copy[i] = { ...copy[i], ...partial }
-      return copy
+  useEffect(() => {
+    autoGrow()
+  }, [activeId])
+
+  function updateConv(id: string, fn: (c: Conversation) => Conversation) {
+    setConversations((prev) => prev.map((c) => (c.id === id ? fn(c) : c)))
+  }
+
+  function updateLastTurn(id: string, partial: Partial<Turn>) {
+    updateConv(id, (c) => {
+      const turns = [...c.turns]
+      const i = turns.length - 1
+      if (i >= 0) turns[i] = { ...turns[i], ...partial }
+      return { ...c, turns }
     })
   }
 
@@ -73,56 +116,79 @@ export default function ChatPage() {
     ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`
   }
 
-  async function send() {
-    const text = input.trim()
-    if (!text || busy) return
+  function addConversation() {
+    const conv = newConversation()
+    setConversations((prev) => [...prev, conv])
+    setActiveId(conv.id)
+  }
 
-    setError(null)
-    setInput('')
-    requestAnimationFrame(autoGrow)
+  function closeConversation(id: string) {
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== id)
+      const list = next.length > 0 ? next : [newConversation()]
+      // If the active tab was closed, fall back to a neighbour.
+      if (id === activeId) {
+        const idx = prev.findIndex((c) => c.id === id)
+        const fallback = list[Math.min(idx, list.length - 1)]
+        setActiveId(fallback.id)
+      }
+      return list
+    })
+  }
+
+  async function send(convId: string) {
+    const conv = convosRef.current.find((c) => c.id === convId)
+    if (!conv) return
+    const text = conv.draft.trim()
+    if (!text || conv.busy) return
 
     const convo: ChatMessage[] = [
-      ...turns.map(({ role, content }) => ({ role, content })),
+      ...conv.turns.map(({ role, content }) => ({ role, content })),
       { role: 'user', content: text },
     ]
-    setTurns((prev) => [
-      ...prev,
-      { role: 'user', content: text },
-      { role: 'assistant', content: '', streaming: true },
-    ])
-    setBusy(true)
+
+    updateConv(convId, (c) => ({
+      ...c,
+      draft: '',
+      busy: true,
+      error: null,
+      turns: [...c.turns, { role: 'user', content: text }, { role: 'assistant', content: '', streaming: true }],
+    }))
+    requestAnimationFrame(autoGrow)
 
     let acc = ''
-    let srcs: ChatSource[] | undefined
     try {
       for await (const ev of streamChat(convo)) {
         if (ev.type === 'delta') {
           acc += ev.text
-          updateLast({ content: acc, streaming: true })
+          updateLastTurn(convId, { content: acc, streaming: true })
         } else if (ev.type === 'context') {
-          srcs = ev.sources
-          updateLast({ sources: srcs })
+          updateLastTurn(convId, { sources: ev.sources })
         } else if (ev.type === 'done') {
-          updateLast({ streaming: false })
+          updateLastTurn(convId, { streaming: false })
         } else if (ev.type === 'error') {
           throw new Error(ev.message)
         }
       }
-      updateLast({ streaming: false })
+      updateLastTurn(convId, { streaming: false })
+      updateConv(convId, (c) => ({ ...c, busy: false }))
     } catch (err) {
-      // Drop the empty assistant placeholder; keep the user's message visible.
-      setTurns((prev) => (prev[prev.length - 1]?.role === 'assistant' ? prev.slice(0, -1) : prev))
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
+      const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.'
+      updateConv(convId, (c) => {
+        // Drop the empty assistant placeholder; keep the user's message visible.
+        const last = c.turns[c.turns.length - 1]
+        const turns = last?.role === 'assistant' && last.content === '' ? c.turns.slice(0, -1) : c.turns
+        return { ...c, busy: false, error: message, turns }
+      })
     } finally {
-      setBusy(false)
-      taRef.current?.focus()
+      if (convId === activeIdRef.current) taRef.current?.focus()
     }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      void send()
+      void send(activeId)
     }
   }
 
@@ -131,30 +197,64 @@ export default function ChatPage() {
       <header className="flex flex-shrink-0 items-center justify-between border-b border-line bg-black px-4 py-3 sm:px-6">
         <div className="flex-1 text-center">
           <img className="mx-auto block h-7 w-auto" src="/assets/cci_logo.svg" alt="AI Library" />
-          <div className="mt-1 text-[0.72rem] uppercase tracking-[0.06em] text-ink-faint">
-            AI Library
-          </div>
+          <div className="mt-1 text-[0.72rem] uppercase tracking-[0.06em] text-ink-faint">AI Library</div>
         </div>
         <div className="flex items-center gap-2">
           <Link to="/transcripts" className="btn-ghost hidden sm:inline-block">
             Transcripts
           </Link>
-          <button
-            className="btn-ghost"
-            onClick={() => {
-              if (!busy) {
-                setTurns([])
-                setError(null)
-              }
-            }}
-          >
+          <button className="btn-ghost" onClick={addConversation}>
             New
           </button>
         </div>
       </header>
 
+      {/* In-page conversation tabs */}
+      <div className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-line bg-black px-2 py-1.5">
+        {conversations.map((c) => {
+          const isActive = c.id === activeId
+          return (
+            <div
+              key={c.id}
+              className={[
+                'group flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-[0.8rem] transition-colors',
+                isActive
+                  ? 'border-accent bg-[#1a0808] text-white'
+                  : 'border-line-strong bg-surface text-ink-dim hover:text-white',
+              ].join(' ')}
+            >
+              <button
+                className="flex items-center gap-1.5 whitespace-nowrap"
+                onClick={() => setActiveId(c.id)}
+              >
+                {c.busy && (
+                  <span className="h-1.5 w-1.5 flex-shrink-0 animate-pulse rounded-full bg-accent" />
+                )}
+                {conversationTitle(c)}
+              </button>
+              {conversations.length > 1 && (
+                <button
+                  aria-label="Close conversation"
+                  className="-mr-0.5 rounded px-0.5 text-ink-faint opacity-60 transition-opacity hover:text-white hover:opacity-100"
+                  onClick={() => closeConversation(c.id)}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )
+        })}
+        <button
+          aria-label="New conversation"
+          className="flex-shrink-0 rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[0.8rem] text-ink-dim transition-colors hover:text-white"
+          onClick={addConversation}
+        >
+          +
+        </button>
+      </div>
+
       <div ref={listRef} className="flex flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-6">
-        {turns.length === 0 ? (
+        {active.turns.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-ink-ghost">
             <img className="mb-1 w-[72px] opacity-20" src="/assets/cci_logo.svg" alt="" />
             <p className="text-[0.88rem] tracking-[0.03em] text-ink-faint">
@@ -162,7 +262,7 @@ export default function ChatPage() {
             </p>
           </div>
         ) : (
-          turns.map((t, i) =>
+          active.turns.map((t, i) =>
             t.role === 'user' ? (
               <div key={i} className="flex max-w-[min(75%,680px)] flex-col self-end">
                 <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-4 py-2.5 text-[0.93rem] leading-relaxed text-white">
@@ -188,27 +288,31 @@ export default function ChatPage() {
 
       <div className="flex-shrink-0 border-t border-line bg-black px-4 py-3.5">
         <div className="mx-auto flex max-w-[760px] flex-col gap-2">
-          {error && (
+          {active.error && (
             <div className="rounded-md border border-accent-muted bg-[#1c0e0e] px-3 py-2 text-[0.83rem] text-[#ef8888]">
-              {error}
+              {active.error}
             </div>
           )}
           <div className="flex items-end gap-2.5">
             <textarea
               ref={taRef}
               rows={1}
-              value={input}
-              disabled={busy}
+              value={active.draft}
+              disabled={active.busy}
               placeholder="Ask about a sermon…"
               onChange={(e) => {
-                setInput(e.target.value)
+                updateConv(activeId, (c) => ({ ...c, draft: e.target.value }))
                 autoGrow()
               }}
               onKeyDown={onKeyDown}
               className="field max-h-[140px] flex-1 resize-none leading-relaxed disabled:text-ink-ghost"
             />
-            <button className="btn-primary" disabled={busy || !input.trim()} onClick={() => void send()}>
-              {busy ? '…' : 'Send'}
+            <button
+              className="btn-primary"
+              disabled={active.busy || !active.draft.trim()}
+              onClick={() => void send(activeId)}
+            >
+              {active.busy ? '…' : 'Send'}
             </button>
           </div>
         </div>
