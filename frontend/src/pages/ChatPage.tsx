@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { marked } from 'marked'
 import { streamChat } from '../api/client'
-import type { ChatMessage, ChatSource } from '../api/types'
+import type { ChatMessage } from '../api/types'
 import ThemeToggle from '../components/ThemeToggle'
 import { useNav } from '../contexts/NavContext'
+import { useConversations, type Conversation } from '../contexts/ConversationsContext'
 
 function HamburgerIcon() {
   return (
@@ -20,28 +21,6 @@ function HamburgerIcon() {
   )
 }
 
-interface Turn {
-  role: 'user' | 'assistant'
-  content: string
-  sources?: ChatSource[]
-  streaming?: boolean
-}
-
-interface Conversation {
-  id: string
-  turns: Turn[]
-  draft: string
-  busy: boolean
-  error: string | null
-}
-
-let convSeq = 0
-function newConversation(): Conversation {
-  convSeq += 1
-  return { id: `c${Date.now()}-${convSeq}`, turns: [], draft: '', busy: false, error: null }
-}
-
-// A short tab label derived from the first user message, or a placeholder.
 function conversationTitle(c: Conversation): string {
   const firstUser = c.turns.find((t) => t.role === 'user')
   if (!firstUser) return 'New chat'
@@ -63,7 +42,7 @@ function TypingDots() {
   )
 }
 
-function Sources({ sources }: { sources: ChatSource[] }) {
+function Sources({ sources }: { sources: import('../api/types').ChatSource[] }) {
   return (
     <details className="group mt-1.5 text-[0.78rem]">
       <summary className="flex cursor-pointer list-none items-center gap-1 text-ink-faint transition-colors hover:text-ink-dim">
@@ -84,23 +63,21 @@ function Sources({ sources }: { sources: ChatSource[] }) {
 
 export default function ChatPage() {
   const { open } = useNav()
-  const [conversations, setConversations] = useState<Conversation[]>(() => [newConversation()])
-  const [activeId, setActiveId] = useState<string>(() => conversations[0].id)
+  const {
+    conversations, activeId, setActiveId,
+    updateConv, updateLastTurn, addConversation, closeConversation,
+  } = useConversations()
 
   // Mirror of conversations for stale-free reads inside the async send loop.
   const convosRef = useRef(conversations)
-  useEffect(() => {
-    convosRef.current = conversations
-  }, [conversations])
+  useEffect(() => { convosRef.current = conversations }, [conversations])
 
   const listRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   // Track the active id so the async send loop can focus only when relevant.
   const activeIdRef = useRef(activeId)
-  useEffect(() => {
-    activeIdRef.current = activeId
-  }, [activeId])
+  useEffect(() => { activeIdRef.current = activeId }, [activeId])
 
   const active = conversations.find((c) => c.id === activeId) ?? conversations[0]
 
@@ -109,48 +86,13 @@ export default function ChatPage() {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
   }, [active.turns, activeId])
 
-  useEffect(() => {
-    autoGrow()
-  }, [activeId])
-
-  function updateConv(id: string, fn: (c: Conversation) => Conversation) {
-    setConversations((prev) => prev.map((c) => (c.id === id ? fn(c) : c)))
-  }
-
-  function updateLastTurn(id: string, partial: Partial<Turn>) {
-    updateConv(id, (c) => {
-      const turns = [...c.turns]
-      const i = turns.length - 1
-      if (i >= 0) turns[i] = { ...turns[i], ...partial }
-      return { ...c, turns }
-    })
-  }
+  useEffect(() => { autoGrow() }, [activeId])
 
   function autoGrow() {
     const ta = taRef.current
     if (!ta) return
     ta.style.height = 'auto'
     ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`
-  }
-
-  function addConversation() {
-    const conv = newConversation()
-    setConversations((prev) => [...prev, conv])
-    setActiveId(conv.id)
-  }
-
-  function closeConversation(id: string) {
-    setConversations((prev) => {
-      const next = prev.filter((c) => c.id !== id)
-      const list = next.length > 0 ? next : [newConversation()]
-      // If the active tab was closed, fall back to a neighbour.
-      if (id === activeId) {
-        const idx = prev.findIndex((c) => c.id === id)
-        const fallback = list[Math.min(idx, list.length - 1)]
-        setActiveId(fallback.id)
-      }
-      return list
-    })
   }
 
   async function send(convId: string) {
@@ -213,7 +155,7 @@ export default function ChatPage() {
     <div className="flex h-full flex-col">
       <header className="flex flex-shrink-0 items-center justify-between border-b border-line bg-bg px-4 py-3 sm:px-6">
         <div className="flex-1 text-left sm:text-center">
-          <img className="block h-7 w-auto logo-inv sm:mx-auto" src="/assets/cci_logo.svg" alt="AI Library" />
+          <img className="block h-7 w-auto sm:mx-auto" src="/assets/cci_logo.svg" alt="AI Library" />
           <div className="mt-1 text-[0.72rem] uppercase tracking-[0.06em] text-ink-faint">AI Library</div>
         </div>
         <div className="flex items-center gap-2">

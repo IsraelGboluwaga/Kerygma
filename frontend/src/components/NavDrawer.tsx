@@ -95,7 +95,7 @@ export default function NavDrawer() {
         aria-label="Site navigation"
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <img className="h-6 w-auto logo-inv" src="/assets/cci_logo.svg" alt="" />
+          <img className="h-6 w-auto" src="/assets/cci_logo.svg" alt="" />
           <button
             onClick={close}
             className="p-1 text-xl leading-none text-ink-dim transition-colors hover:text-ink-bright"
