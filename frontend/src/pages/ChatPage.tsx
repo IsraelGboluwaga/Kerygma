@@ -200,7 +200,7 @@ export default function ChatPage() {
           <div className="mt-1 text-[0.72rem] uppercase tracking-[0.06em] text-ink-faint">AI Library</div>
         </div>
         <div className="flex items-center gap-2">
-          <Link to="/transcripts" className="btn-ghost hidden sm:inline-block">
+          <Link to="/transcripts" className="btn-ghost">
             Transcripts
           </Link>
           <button className="btn-ghost" onClick={addConversation}>
