@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { getTranscript, ApiError } from '../api/client'
 import type { TranscriptView } from '../api/types'
 import ThemeToggle from '../components/ThemeToggle'
