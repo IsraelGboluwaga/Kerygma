@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { getTranscript, ApiError } from '../api/client'
 import type { TranscriptView } from '../api/types'
 import ThemeToggle from '../components/ThemeToggle'
@@ -39,6 +39,7 @@ function paragraphs(transcript: string): string[] {
 
 export default function TranscriptViewPage() {
   const { open } = useNav()
+  const navigate = useNavigate()
   const { videoId } = useParams<{ videoId: string }>()
   const [data, setData] = useState<TranscriptView | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -63,9 +64,9 @@ export default function TranscriptViewPage() {
     return (
       <div className="flex min-h-full flex-col items-center justify-center gap-3 text-center">
         <p className="text-ink-dim">Transcript not found.</p>
-        <Link to="/transcripts" className="btn-ghost">
+        <button className="btn-ghost" onClick={() => navigate(-1)}>
           ‹ Transcripts
-        </Link>
+        </button>
       </div>
     )
   }
@@ -74,9 +75,9 @@ export default function TranscriptViewPage() {
     return (
       <div className="flex min-h-full flex-col items-center justify-center gap-3 text-center">
         <p className="text-err-text">{error}</p>
-        <Link to="/transcripts" className="btn-ghost">
+        <button className="btn-ghost" onClick={() => navigate(-1)}>
           ‹ Transcripts
-        </Link>
+        </button>
       </div>
     )
   }
@@ -92,9 +93,9 @@ export default function TranscriptViewPage() {
   return (
     <div className="min-h-full">
       <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-line bg-bg px-4 py-3 sm:px-6">
-        <Link to="/transcripts" className="btn-ghost whitespace-nowrap">
+        <button className="btn-ghost whitespace-nowrap" onClick={() => navigate(-1)}>
           ‹ Transcripts
-        </Link>
+        </button>
         <div className="flex items-center gap-2">
           <a
             href={`/transcripts/${sermon.videoId}/download`}
