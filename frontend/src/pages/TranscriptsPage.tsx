@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { listThemes, searchTranscripts } from '../api/client'
 import type { ThemeOption, TranscriptRow } from '../api/types'
 import TopBar from '../components/TopBar'
@@ -11,12 +11,19 @@ const MONTHS = [
 ]
 
 export default function TranscriptsPage() {
-  const [q, setQ] = useState('')
-  const [filtersOpen, setFiltersOpen] = useState(false)
-  const [month, setMonth] = useState('')
-  const [year, setYear] = useState('')
-  const [theme, setTheme] = useState('')
-  const [speaker, setSpeaker] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Form fields initialised from URL so back-navigation restores them.
+  const [q, setQ] = useState(() => searchParams.get('q') ?? '')
+  const [month, setMonth] = useState(() => searchParams.get('month') ?? '')
+  const [year, setYear] = useState(() => searchParams.get('year') ?? '')
+  const [theme, setTheme] = useState(() => searchParams.get('theme') ?? '')
+  const [speaker, setSpeaker] = useState(() => searchParams.get('speaker') ?? '')
+
+  // Auto-open filters panel if any filter param is already in the URL.
+  const [filtersOpen, setFiltersOpen] = useState(() =>
+    !!(searchParams.get('month') || searchParams.get('year') || searchParams.get('theme') || searchParams.get('speaker'))
+  )
 
   const [themes, setThemes] = useState<ThemeOption[]>([])
   const [status, setStatus] = useState('')
@@ -31,10 +38,13 @@ export default function TranscriptsPage() {
       .catch(() => setThemes([]))
   }, [])
 
+  // Re-run the search on mount when the URL already has params (back-navigation).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (searchParams.toString()) void doSearch() }, [])
+
   function buildParams(): string {
-    const query = q.trim()
-    if (query) return `q=${encodeURIComponent(query)}`
     const p = new URLSearchParams()
+    if (q.trim()) p.set('q', q.trim())
     if (year.trim()) p.set('year', year.trim())
     if (month) p.set('month', month)
     if (theme) p.set('theme', theme)
@@ -49,6 +59,8 @@ export default function TranscriptsPage() {
       setStatus('Enter a search or pick a filter.')
       return
     }
+    // Persist current search to URL so back-navigation can restore it.
+    setSearchParams(new URLSearchParams(params), { replace: true })
     setBusy(true)
     setStatusError(false)
     setStatus('Searching…')
@@ -183,7 +195,7 @@ export default function TranscriptsPage() {
                   >
                     <td className="block sm:table-cell px-3 py-2 sm:border-b sm:border-line align-top">
                       <div>
-                        <Link to={r.viewUrl} className="font-semibold text-white hover:text-accent hover:underline">
+                        <Link to={r.viewUrl} className="font-semibold text-accent hover:opacity-80 hover:underline">
                           {r.title}
                         </Link>
                       </div>

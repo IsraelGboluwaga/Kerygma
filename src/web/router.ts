@@ -375,28 +375,38 @@ export function createRouter(anthropic: Anthropic): Hono {
     c.json(listThemes().map((t) => ({ id: t.id, name: t.name })))
   )
 
-  // Search endpoint — `q` (natural language) OR structured month/year/theme/speaker.
+  // Search endpoint — `q` (natural language) plus optional structured filters.
+  // Explicit month/year/theme/speaker params always take priority over NLP-detected values.
   app.get('/api/transcripts/search', async (c) => {
     const q = c.req.query('q')?.trim()
+    const year = c.req.query('year')?.trim()
+    const month = c.req.query('month')?.trim()
+    const explicitDate = year && month ? `${year}-${month}` : year || undefined
+    const explicitTheme = c.req.query('theme')?.trim() || undefined
+    const explicitSpeaker = c.req.query('speaker')?.trim() || undefined
     let filters: TranscriptQuery
     let sermons: SermonRow[]
 
     if (q) {
-      filters = await parseTranscriptQuery(q, anthropic)
+      const nlp = await parseTranscriptQuery(q, anthropic)
+      // Explicit URL params override NLP-extracted values.
+      filters = {
+        date: explicitDate ?? nlp.date,
+        theme: explicitTheme ?? nlp.theme,
+        topic: nlp.topic,
+        speaker: explicitSpeaker ?? nlp.speaker,
+      }
       sermons = resolveTranscriptSermons(filters)
-      // The parser found nothing structured — treat the raw text as keywords.
-      if (sermons.length === 0 && !filters.date && !filters.topic && !filters.speaker) {
+      // NLP found nothing structured and no explicit filters — fall back to keyword search.
+      if (sermons.length === 0 && !filters.date && !filters.topic && !filters.speaker && !filters.theme) {
         sermons = searchSermons(q, MAX_TRANSCRIPT_RESULTS)
       }
     } else {
-      const year = c.req.query('year')?.trim()
-      const month = c.req.query('month')?.trim()
-      const date = year && month ? `${year}-${month}` : year || undefined
       filters = {
-        date,
-        theme: c.req.query('theme')?.trim() || undefined,
+        date: explicitDate,
+        theme: explicitTheme,
         topic: c.req.query('topic')?.trim() || undefined,
-        speaker: c.req.query('speaker')?.trim() || undefined,
+        speaker: explicitSpeaker,
       }
       sermons = resolveTranscriptSermons(filters)
     }
