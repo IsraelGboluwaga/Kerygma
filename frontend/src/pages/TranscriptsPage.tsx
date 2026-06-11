@@ -183,7 +183,7 @@ export default function TranscriptsPage() {
                   >
                     <td className="block sm:table-cell px-3 py-2 sm:border-b sm:border-line align-top">
                       <div>
-                        <Link to={r.viewUrl} className="font-semibold text-white hover:text-accent hover:underline">
+                        <Link to={r.viewUrl} className="font-semibold text-accent hover:opacity-80 hover:underline">
                           {r.title}
                         </Link>
                       </div>
