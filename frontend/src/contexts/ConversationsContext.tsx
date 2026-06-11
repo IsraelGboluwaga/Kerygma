@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
 import type { ChatSource } from '../api/types'
 
 export interface Turn {
@@ -39,12 +39,39 @@ export function useConversations(): ConversationsCtx {
   return useContext(ConversationsContext)
 }
 
-// Created at module load — stable across renders, shared by both useState initialisers.
+const STORAGE_KEY = 'kerygma_convos'
+
+function loadSaved(): { convos: Conversation[]; id: string } | null {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw) as { convos: Conversation[]; activeId: string }
+    if (!Array.isArray(data.convos) || data.convos.length === 0) return null
+    const convos = data.convos.map(c => ({
+      ...c,
+      busy: false,
+      error: null as null,
+      turns: c.turns.map(t => (t.streaming ? { ...t, streaming: false } : t)),
+    }))
+    const id = convos.some(c => c.id === data.activeId) ? data.activeId : convos[0].id
+    return { convos, id }
+  } catch {
+    return null
+  }
+}
+
+// Created at module load — used only when sessionStorage has no saved state.
 const _first = newConversation()
 
 export function ConversationsProvider({ children }: { children: ReactNode }) {
-  const [conversations, setConversations] = useState<Conversation[]>([_first])
-  const [activeId, setActiveId] = useState<string>(_first.id)
+  const [conversations, setConversations] = useState<Conversation[]>(() => loadSaved()?.convos ?? [_first])
+  const [activeId, setActiveId] = useState<string>(() => loadSaved()?.id ?? _first.id)
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ convos: conversations, activeId }))
+    } catch { /* quota or private mode */ }
+  }, [conversations, activeId])
 
   const updateConv = useCallback((id: string, fn: (c: Conversation) => Conversation) => {
     setConversations((prev) => prev.map((c) => (c.id === id ? fn(c) : c)))
