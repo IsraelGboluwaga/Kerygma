@@ -31,8 +31,8 @@ export default function TopBar({
 
   return (
     <div className="relative flex items-center border-b border-line bg-bg px-6 py-3">
-      {/* Logo + subtitle — absolutely centered so it stays mid-page regardless of right-side controls */}
-      <div className="pointer-events-none absolute inset-x-0 flex justify-center">
+      {/* Logo + subtitle — left-aligned on mobile; absolutely centered on sm+ so it stays mid-page regardless of right-side controls */}
+      <div className="flex justify-center sm:pointer-events-none sm:absolute sm:inset-x-0">
         <div className="flex items-center gap-4">
           <img
             className="block h-[22px] w-auto logo-inv"
