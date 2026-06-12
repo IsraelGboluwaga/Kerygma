@@ -19,6 +19,10 @@ import {
   recordMissingSermon,
   listMissingSermons,
   removeMissingSermon,
+  resolveAliasToCanonical,
+  upsertSpeakerAlias,
+  deleteSpeakerAlias,
+  listSpeakerAliases,
   type SaveSermonInput,
   type SaveChunkInput,
 } from '../src/db/queries.js'
@@ -185,8 +189,9 @@ describe('getSpeakersMatchingFilter', () => {
     saveSermon(sampleSermon({ video_id: 'cccccccccccccccc', speaker: 'Pastor Seun', date: '2024-05-01' }))
   })
 
-  it('returns all matching speakers for a broad filter', () => {
-    const results = getSpeakersMatchingFilter('Apostle')
+  it('returns all matching speakers for a broad LIKE filter', () => {
+    // 'Iren' is not an alias — falls through to LIKE and matches both
+    const results = getSpeakersMatchingFilter('Iren')
     expect(results).toHaveLength(2)
     expect(results).toContain('Apostle Emmanuel Iren')
     expect(results).toContain('Apostle Kairos Iren')
@@ -198,13 +203,84 @@ describe('getSpeakersMatchingFilter', () => {
     expect(results[0]).toBe('Apostle Emmanuel Iren')
   })
 
-  it('is case-insensitive', () => {
-    expect(getSpeakersMatchingFilter('apostle')).toHaveLength(2)
+  it('is case-insensitive for LIKE fallback', () => {
+    expect(getSpeakersMatchingFilter('iren')).toHaveLength(2)
     expect(getSpeakersMatchingFilter('PASTOR')).toHaveLength(1)
   })
 
   it('returns empty array when no speaker matches', () => {
     expect(getSpeakersMatchingFilter('Bishop')).toHaveLength(0)
+  })
+
+  it('resolves an alias and narrows to the canonical speaker', () => {
+    // 'pastey' is an alias for 'Apostle Emmanuel Iren'
+    const results = getSpeakersMatchingFilter('pastey')
+    expect(results).toHaveLength(1)
+    expect(results[0]).toBe('Apostle Emmanuel Iren')
+  })
+
+  it('alias lookup is case-insensitive', () => {
+    expect(getSpeakersMatchingFilter('PIE')).toHaveLength(1)
+    expect(getSpeakersMatchingFilter('Pie')).toHaveLength(1)
+  })
+
+  it('alias overrides broad LIKE — apostle resolves to one speaker', () => {
+    // 'apostle' is seeded as an alias for Apostle Emmanuel Iren, so it returns
+    // only that speaker even though two speakers contain the word "apostle".
+    const results = getSpeakersMatchingFilter('apostle')
+    expect(results).toHaveLength(1)
+    expect(results[0]).toBe('Apostle Emmanuel Iren')
+  })
+})
+
+describe('resolveAliasToCanonical', () => {
+  it('returns the canonical name for a known alias', () => {
+    expect(resolveAliasToCanonical('pastey')).toBe('Apostle Emmanuel Iren')
+    expect(resolveAliasToCanonical('pie')).toBe('Apostle Emmanuel Iren')
+    expect(resolveAliasToCanonical('a-z l')).toBe('Pastor Laju')
+    expect(resolveAliasToCanonical('pl')).toBe('Pastor Laju')
+  })
+
+  it('is case-insensitive', () => {
+    expect(resolveAliasToCanonical('PIE')).toBe('Apostle Emmanuel Iren')
+    expect(resolveAliasToCanonical('Pastey')).toBe('Apostle Emmanuel Iren')
+    expect(resolveAliasToCanonical('PL')).toBe('Pastor Laju')
+  })
+
+  it('returns null for an unknown term', () => {
+    expect(resolveAliasToCanonical('bishop')).toBeNull()
+    expect(resolveAliasToCanonical('')).toBeNull()
+  })
+})
+
+describe('upsertSpeakerAlias / deleteSpeakerAlias / listSpeakerAliases', () => {
+  it('upsert adds a new alias', () => {
+    upsertSpeakerAlias('dr john', 'Dr. John Smith')
+    expect(resolveAliasToCanonical('dr john')).toBe('Dr. John Smith')
+  })
+
+  it('upsert overwrites an existing alias', () => {
+    upsertSpeakerAlias('pastey', 'New Canonical')
+    expect(resolveAliasToCanonical('pastey')).toBe('New Canonical')
+  })
+
+  it('upsert stores alias lowercased regardless of input case', () => {
+    upsertSpeakerAlias('DR JOHN', 'Dr. John Smith')
+    expect(resolveAliasToCanonical('dr john')).toBe('Dr. John Smith')
+  })
+
+  it('delete removes an alias', () => {
+    upsertSpeakerAlias('temp', 'Someone')
+    deleteSpeakerAlias('temp')
+    expect(resolveAliasToCanonical('temp')).toBeNull()
+  })
+
+  it('listSpeakerAliases returns all aliases ordered by canonical then alias', () => {
+    const all = listSpeakerAliases()
+    expect(all.length).toBeGreaterThan(0)
+    expect(all.every((a) => a.alias === a.alias.toLowerCase())).toBe(true)
+    const pie = all.find((a) => a.alias === 'pie')
+    expect(pie?.canonicalName).toBe('Apostle Emmanuel Iren')
   })
 })
 
