@@ -43,7 +43,7 @@ const STORAGE_KEY = 'kerygma_convos'
 
 function loadSaved(): { convos: Conversation[]; id: string } | null {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null
     const data = JSON.parse(raw) as { convos: Conversation[]; activeId: string }
     if (!Array.isArray(data.convos) || data.convos.length === 0) return null
@@ -60,7 +60,7 @@ function loadSaved(): { convos: Conversation[]; id: string } | null {
   }
 }
 
-// Created at module load — used only when sessionStorage has no saved state.
+// Created at module load — used only when localStorage has no saved state.
 const _first = newConversation()
 
 export function ConversationsProvider({ children }: { children: ReactNode }) {
@@ -69,7 +69,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ convos: conversations, activeId }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ convos: conversations, activeId }))
     } catch { /* quota or private mode */ }
   }, [conversations, activeId])
 
