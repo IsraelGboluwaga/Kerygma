@@ -87,6 +87,13 @@ export function initDb(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_job_created       ON jobs(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_missing_updated   ON missing_sermons(updated_at DESC);
 
+    -- Maps lowercased aliases/nicknames to the canonical speaker name stored in sermons.speaker.
+    -- Checked before the LIKE fallback in speaker resolution so short/informal names work.
+    CREATE TABLE IF NOT EXISTS speaker_aliases (
+      alias          TEXT PRIMARY KEY,
+      canonical_name TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS config (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -176,4 +183,25 @@ export function initDb(db: Database.Database): void {
   if (!jobColNames.has('phase')) {
     db.exec(`ALTER TABLE jobs ADD COLUMN phase TEXT`)
   }
+
+  // Seed known speaker aliases (INSERT OR IGNORE — safe to re-run on every startup).
+  const aliasStmt = db.prepare(`INSERT OR IGNORE INTO speaker_aliases (alias, canonical_name) VALUES (?, ?)`)
+  db.transaction(() => {
+    for (const [alias, canonical] of SEED_ALIASES) {
+      aliasStmt.run(alias, canonical)
+    }
+  })()
 }
+
+// Alias → canonical speaker name as stored in sermons.speaker.
+// Aliases are lowercased; resolution is case-insensitive.
+const SEED_ALIASES: ReadonlyArray<[string, string]> = [
+  ['apostle',               'Apostle Emmanuel Iren'],
+  ['apostle emmanuel iren', 'Apostle Emmanuel Iren'],
+  ['pastor emmanuel iren',  'Apostle Emmanuel Iren'],
+  ['pastey',                'Apostle Emmanuel Iren'],
+  ['pie',                   'Apostle Emmanuel Iren'],
+  ['pastor laju',           'Pastor Laju'],
+  ['a-z l',                 'Pastor Laju'],
+  ['pl',                    'Pastor Laju'],
+]

@@ -548,12 +548,40 @@ export function countSermons(): number {
 }
 
 export function getSpeakersMatchingFilter(filter: string): string[] {
+  const canonical = resolveAliasToCanonical(filter)
+  const effectiveFilter = canonical ?? filter
   const rows = getDb()
     .prepare(
       `SELECT DISTINCT speaker FROM sermons
        WHERE speaker IS NOT NULL AND ingestion_status = 'done' AND LOWER(speaker) LIKE LOWER(?)
        ORDER BY speaker`
     )
-    .all(`%${filter}%`) as { speaker: string }[]
+    .all(`%${effectiveFilter}%`) as { speaker: string }[]
   return rows.map((r) => r.speaker)
+}
+
+export function resolveAliasToCanonical(filter: string): string | null {
+  const row = getDb()
+    .prepare(`SELECT canonical_name FROM speaker_aliases WHERE alias = LOWER(?)`)
+    .get(filter.trim()) as { canonical_name: string } | undefined
+  return row?.canonical_name ?? null
+}
+
+export function upsertSpeakerAlias(alias: string, canonicalName: string): void {
+  getDb()
+    .prepare(`INSERT OR REPLACE INTO speaker_aliases (alias, canonical_name) VALUES (LOWER(?), ?)`)
+    .run(alias.trim(), canonicalName)
+}
+
+export function deleteSpeakerAlias(alias: string): void {
+  getDb()
+    .prepare(`DELETE FROM speaker_aliases WHERE alias = LOWER(?)`)
+    .run(alias.trim())
+}
+
+export function listSpeakerAliases(): { alias: string; canonicalName: string }[] {
+  const rows = getDb()
+    .prepare(`SELECT alias, canonical_name FROM speaker_aliases ORDER BY canonical_name, alias`)
+    .all() as { alias: string; canonical_name: string }[]
+  return rows.map((r) => ({ alias: r.alias, canonicalName: r.canonical_name }))
 }
