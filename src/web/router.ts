@@ -18,6 +18,7 @@ import {
   getSermonsByThemeName,
   searchSermons,
   searchSermonsByTopic,
+  findSermonsByTitle,
   getTranscriptionBySermonId,
   resolveAliasToCanonical,
   type SermonRow,
@@ -182,6 +183,23 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
       },
     },
   },
+  {
+    name: 'find_sermon',
+    description:
+      'Look up a specific sermon by (part of) its title and return its details, including the YouTube/video link where it can be watched. Use this whenever a member asks for the link, video, recording, or "where can I watch" of a named sermon, e.g. "what\'s the YouTube link for the sermon on the prodigal son?". Optionally narrow by speaker or date. If a matched sermon has no link on file, the result says so.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Part or all of the sermon title to look up' },
+        speaker: { type: 'string', description: 'Optional speaker name or partial name to narrow results' },
+        date: {
+          type: 'string',
+          description: 'Optional year, month, or day (YYYY, YYYY-MM, or YYYY-MM-DD) to narrow results',
+        },
+      },
+      required: ['title'],
+    },
+  },
 ]
 
 function searchExcerptsTool(query: string, speaker?: string): ChatToolResult {
@@ -233,6 +251,32 @@ function listSermonsTool(date?: string, topic?: string, speaker?: string): ChatT
   return { text: `${rows.length} sermon(s) matched (this is the complete list):\n${body}`, sources }
 }
 
+// Resolve a named sermon to its details so the chat can answer "what's the
+// YouTube link for …" questions. Matches on the title (substring), optionally
+// narrowed by speaker/date, and surfaces the webpage_url (the YouTube link).
+function findSermonTool(title: string, speaker?: string, date?: string): ChatToolResult {
+  if (!title) return { text: 'No sermon title was given to look up.', sources: [] }
+  let rows = findSermonsByTitle(title, 10)
+  if (speaker) {
+    const sp = speaker.toLowerCase()
+    rows = rows.filter((r) => (r.speaker ?? '').toLowerCase().includes(sp))
+  }
+  if (date) rows = rows.filter((r) => r.date.startsWith(date))
+  if (rows.length === 0) {
+    return { text: `No sermon found with a title matching "${title}".`, sources: [] }
+  }
+  const sources: ChatSource[] = rows.map((r) => ({ title: r.title, date: r.date }))
+  const body = rows
+    .map((r) => {
+      const parts = [r.title, r.speaker ?? 'Unknown speaker', r.date]
+      if (r.theme) parts.push(`Theme: ${r.theme}`)
+      parts.push(r.webpage_url ? `YouTube: ${r.webpage_url}` : 'YouTube: (no link on file)')
+      return `• ${parts.join(' | ')}`
+    })
+    .join('\n')
+  return { text: `${rows.length} sermon(s) matched:\n${body}`, sources }
+}
+
 export function runChatTool(name: string, input: unknown): ChatToolResult {
   const args = (input ?? {}) as Record<string, unknown>
   const str = (v: unknown): string | undefined =>
@@ -242,6 +286,9 @@ export function runChatTool(name: string, input: unknown): ChatToolResult {
   }
   if (name === 'list_sermons') {
     return listSermonsTool(str(args.date), str(args.topic), str(args.speaker))
+  }
+  if (name === 'find_sermon') {
+    return findSermonTool(str(args.title) ?? '', str(args.speaker), str(args.date))
   }
   return { text: `Unknown tool: ${name}`, sources: [] }
 }
@@ -305,6 +352,7 @@ export function createRouter(anthropic: Anthropic): Hono {
       '- For questions about what was taught on a topic, use search_sermon_excerpts and cite the title, speaker, date, and timestamp.',
       '- For questions that ask for a list or count of sermons — by month, date, speaker, or topic — use list_sermons. Its result is the COMPLETE, authoritative set for that filter. Present the full list and do NOT add disclaimers like "these are only the ones in the excerpts I was given".',
       '- Do not enumerate sermons from search_sermon_excerpts results; that tool returns a relevant sample and will miss sermons.',
+      '- For the YouTube/video link, recording, or "where can I watch" of a specific named sermon, use find_sermon and share the YouTube link from the result. If the matched sermon has no link on file, say so plainly rather than inventing one.',
       'When the user refers to "that month", "that series", or a previous result, resolve it from the conversation, then call the tool with the concrete value.',
       'If the user sends a greeting or makes small talk, welcome them warmly as a sermon assistant and invite them to ask about the sermons — do not call any tool.',
     ].join('\n')
