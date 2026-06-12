@@ -324,6 +324,23 @@ export function searchSermonsByTopic(term: string, limit = 50): SermonRow[] {
     .all(match, limit) as SermonRow[]
 }
 
+// Find sermons whose title matches the given text (case-insensitive substring).
+// Used by the chat's find_sermon tool to resolve a sermon a member names so we
+// can hand back its details — notably the YouTube link stored in webpage_url.
+export function findSermonsByTitle(query: string, limit = 10): SermonRow[] {
+  return getDb()
+    .prepare(
+      `SELECT s.*, t.name AS theme
+       FROM sermons s
+       LEFT JOIN themes t ON t.id = s.theme_id
+       WHERE s.ingestion_status = 'done'
+         AND LOWER(s.title) LIKE '%' || LOWER(?) || '%'
+       ORDER BY s.date DESC
+       LIMIT ?`
+    )
+    .all(query, limit) as SermonRow[]
+}
+
 export function listThemes(): ThemeRow[] {
   return getDb().prepare(`SELECT * FROM themes ORDER BY name`).all() as ThemeRow[]
 }

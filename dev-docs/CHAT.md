@@ -30,16 +30,19 @@ The POST handler in `src/web/router.ts`:
 
 ### 3. Tools
 
-Two read-only tools, dispatched by `runChatTool()` in `src/web/router.ts`:
+Three read-only tools, dispatched by `runChatTool()` in `src/web/router.ts`:
 
 | Tool | Backed by | Use for |
 |------|-----------|---------|
 | `search_sermon_excerpts` | `searchChunks()` (FTS5, top 10) | "What does X teach about Y" — returns a relevant **sample** of excerpts with citations |
 | `list_sermons` | `resolveTranscriptSermons()` (date / topic / speaker) | "List/count sermons in month X / by speaker / about topic" — returns the **complete** matching roster |
+| `find_sermon` | `findSermonsByTitle()` (title `LIKE`, optional speaker/date) | "What's the YouTube link / video / recording for the sermon on X" — returns the named sermon's details including its **YouTube link** (`webpage_url`) |
 
 `search_sermon_excerpts` still uses `sanitizeFtsQuery()` under the hood (strips FTS5 special chars and stopwords, wraps tokens in `OR`). `list_sermons` resolves a `{date, topic, speaker}` filter to the full sermon list — by priority topic > theme > date > speaker, then applies the remaining filters as predicates (the same resolver the transcripts page uses). **This is the completeness guarantee:** a month query hits `getSermonsByDate('2023-03')` and returns every sermon in March, not whatever ranked in a keyword search.
 
-The system prompt steers tool selection explicitly: use `list_sermons` (not excerpt search) for any list/count, treat its result as the authoritative complete set, and don't caveat with "these are only the ones in the excerpts I was given" — the exact failure mode that motivated this design.
+`find_sermon` matches the requested text against the sermon **title** (case-insensitive substring), so a member can name a sermon and get its watch link without knowing the exact title. When the matched sermon has no `webpage_url` on file the result says `YouTube: (no link on file)` and the system prompt instructs Claude to say so plainly rather than invent a URL.
+
+The system prompt steers tool selection explicitly: use `list_sermons` (not excerpt search) for any list/count, treat its result as the authoritative complete set, and don't caveat with "these are only the ones in the excerpts I was given" — the exact failure mode that motivated this design. For a link/video request about a named sermon, it routes to `find_sermon`.
 
 ### 4. Agentic loop & streaming
 
@@ -107,6 +110,7 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 |-----------|-------|-----------|
 | Chunks per `search_sermon_excerpts` call | 10 | `router.ts` → `searchChunks(query, 10)` |
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
+| Sermons per `find_sermon` call | up to 10 | `router.ts` → `findSermonsByTitle(title, 10)` |
 | Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
 | Max tokens per Claude turn | 3072 | `router.ts` → `max_tokens: 3072` |
 | Chat rate limit | 30 req/min per IP | `router.ts` → `POST /api/chat` |

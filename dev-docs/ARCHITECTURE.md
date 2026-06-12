@@ -276,6 +276,7 @@ Member types question → POST /api/chat { messages: [...] }
         else runChatTool() per tool_use block:
             search_sermon_excerpts → searchChunks(query, 10)   relevant sample
             list_sermons           → resolveTranscriptSermons  COMPLETE roster
+            find_sermon            → findSermonsByTitle        named sermon + YouTube link
         { type: 'context', sources }              cumulative citations
         append tool_result blocks, continue
     → { type: 'done' }
