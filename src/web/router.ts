@@ -187,7 +187,8 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
 function searchExcerptsTool(query: string, speaker?: string): ChatToolResult {
   let chunks = searchChunks(query, 10)
   if (speaker) {
-    const sp = speaker.toLowerCase()
+    const canonical = resolveAliasToCanonical(speaker)
+    const sp = (canonical ?? speaker).toLowerCase()
     chunks = chunks.filter((c) => (c.speaker ?? '').toLowerCase().includes(sp))
   }
   if (chunks.length === 0) {
