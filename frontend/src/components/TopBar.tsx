@@ -30,20 +30,26 @@ export default function TopBar({
   const { open } = useNav()
 
   return (
-    <div className="flex items-center gap-4 border-b border-line bg-bg px-6 py-3">
-      <img
-        className="block h-[22px] w-auto logo-inv"
-        src="/assets/cci_logo.svg"
-        alt="logo"
-        onError={(e) => {
-          ;(e.target as HTMLImageElement).style.display = 'none'
-        }}
-      />
-      <div className="h-5 w-px bg-line-strong" />
-      <div className="text-[0.78rem] uppercase tracking-[0.04em] text-ink-faint">
-        {subtitle}
+    <div className="relative flex items-center border-b border-line bg-bg px-6 py-3">
+      {/* Logo + subtitle — absolutely centered so it stays mid-page regardless of right-side controls */}
+      <div className="pointer-events-none absolute inset-x-0 flex justify-center">
+        <div className="flex items-center gap-4">
+          <img
+            className="block h-[22px] w-auto logo-inv"
+            src="/assets/cci_logo.svg"
+            alt="logo"
+            onError={(e) => {
+              ;(e.target as HTMLImageElement).style.display = 'none'
+            }}
+          />
+          <div className="h-5 w-px bg-line-strong" />
+          <div className="text-[0.78rem] uppercase tracking-[0.04em] text-ink-faint">
+            {subtitle}
+          </div>
+        </div>
       </div>
 
+      {/* Right-side controls — in normal flow, pushed to the right */}
       <div className="ml-auto flex items-center gap-2">
         {/* Desktop right slot — hidden on mobile */}
         {right && (

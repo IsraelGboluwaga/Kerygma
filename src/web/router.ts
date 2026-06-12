@@ -19,6 +19,7 @@ import {
   searchSermons,
   searchSermonsByTopic,
   getTranscriptionBySermonId,
+  resolveAliasToCanonical,
   type SermonRow,
 } from '../db/queries.js'
 import type { TranscriptSegment } from '../ingestion/transcriber.js'
@@ -106,7 +107,8 @@ function resolveTranscriptSermons(f: TranscriptQuery): SermonRow[] {
     rows = rows.filter((r) => (r.theme ?? '').toLowerCase().includes(theme))
   }
   if (f.speaker) {
-    const sp = f.speaker.toLowerCase()
+    const canonical = resolveAliasToCanonical(f.speaker)
+    const sp = (canonical ?? f.speaker).toLowerCase()
     rows = rows.filter((r) => (r.speaker ?? '').toLowerCase().includes(sp))
   }
   return rows.slice(0, MAX_TRANSCRIPT_RESULTS)
