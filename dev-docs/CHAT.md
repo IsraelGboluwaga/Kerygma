@@ -92,7 +92,8 @@ Sources appear as a collapsible `<details>` element below the response bubble, s
 
 The entire conversation history is kept client-side and sent to the backend on every request. There is no server-side session. This means:
 
-- Conversation context is lost on page refresh (by design — the "New" button clears the in-memory conversation)
+- Conversations persist across page refreshes, tab closes, and browser restarts — `ConversationsContext` mirrors all conversations (and the active tab) to `localStorage` under the `kerygma_convos` key, so a returning member finds their chats waiting. Use the "New" button / `+` tab to start a fresh conversation; closing a tab removes that conversation from the saved state.
+- Persistence is per-device/browser (no auth, no server-side session), and transient flags are sanitised on load: `busy`/`error` reset and any mid-stream `streaming` turn is finalised so a reload never restores a stuck "typing" bubble.
 - Claude can reference earlier exchanges in follow-up answers
 - Each turn independently re-runs the agentic loop and re-queries the DB, so answers always reflect the current library — and "that month/series" references resolve from the conversation before the tool call
 
