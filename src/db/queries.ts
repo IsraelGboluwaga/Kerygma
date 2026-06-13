@@ -248,6 +248,20 @@ export function getSermonByVideoId(videoId: string): SermonRow | null {
   )
 }
 
+/**
+ * All video_ids that are fully ingested (`ingestion_status = 'done'`), as a Set
+ * for O(1) membership checks. Loaded once per API sync so the scheduler can skip
+ * already-ingested sermons without a per-sermon row lookup. Partial rows
+ * (e.g. 'transcribed') are intentionally excluded so they get re-enqueued and
+ * resume from the stored transcript.
+ */
+export function getDoneVideoIds(): Set<string> {
+  const rows = getDb()
+    .prepare(`SELECT video_id FROM sermons WHERE ingestion_status = 'done'`)
+    .all() as { video_id: string }[]
+  return new Set(rows.map((r) => r.video_id))
+}
+
 export function getSermonsByDate(date: string): SermonRow[] {
   return getDb()
     .prepare(`${SERMON_SELECT} WHERE s.date LIKE ? AND s.ingestion_status = 'done' ORDER BY s.date DESC`)

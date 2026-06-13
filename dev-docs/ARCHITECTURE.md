@@ -96,6 +96,7 @@ Typed functions for every DB operation:
 - `getTranscriptionBySermonId(id)` → `TranscriptionRow | null`
 - `completeSermon(id)` — sets `ingestion_status='done'`
 - `getSermonByVideoId(id)` → `SermonRow | null`
+- `getDoneVideoIds()` → `Set<string>` — all fully-ingested (`ingestion_status='done'`) video_ids; loaded once per API sync for in-memory skip checks
 - `getSermonsByDate(date)` → `SermonRow[]`
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
 - `getSpeakersMatchingFilter(filter)` → `string[]` — distinct speaker names matching substring
@@ -171,7 +172,9 @@ daily at 06:00 (`'0 6 * * *'`) for ongoing syncs. The phase switch is handled vi
 `setTimeout` that stops the frequent task and starts the daily one.
 
 `syncFromApi` enqueues every sermon from the API except those already fully ingested
-(`ingestion_status === 'done'`). Partial rows (status `transcribed` — e.g. a prior chunking
+(`ingestion_status === 'done'`). The done check is an in-memory `Set` membership test: the run
+loads all done video_ids up front via `getDoneVideoIds()` (one query) rather than a per-sermon
+DB lookup while walking the API roster. Partial rows (status `transcribed` — e.g. a prior chunking
 failure) are re-enqueued so they resume from the stored transcript via `ingestSermon`'s resume
 path, instead of being skipped forever. This is what lets a failed chunking auto-heal on the next
 sync rather than needing a manual re-ingest.
