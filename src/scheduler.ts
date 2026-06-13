@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { logger } from './logger.js'
 import { errMsg } from './utils.js'
 import { enqueue, getQueueDepth } from './queue.js'
-import { getSermonByVideoId, getMissingVideoIdsByKind, getConfig, setConfig } from './db/queries.js'
+import { getDoneVideoIds, getMissingVideoIdsByKind, getConfig, setConfig } from './db/queries.js'
 import { fetchAllSermons } from './ingestion/api-source.js'
 import { ingestSermon } from './ingestion/pipeline.js'
 
@@ -18,6 +18,10 @@ export async function syncFromApi(anthropic: Anthropic): Promise<void> {
   // run, so skip them rather than re-enqueuing a doomed job each sync.
   const noAudioIds = getMissingVideoIdsByKind('no_audio')
 
+  // Set of fully-ingested video_ids, loaded once so the per-sermon check below
+  // is an in-memory lookup rather than a DB query per item in the roster.
+  const doneIds = getDoneVideoIds()
+
   try {
     for await (const req of fetchAllSermons()) {
       if (req.videoId && noAudioIds.has(req.videoId)) {
@@ -26,11 +30,11 @@ export async function syncFromApi(anthropic: Anthropic): Promise<void> {
       }
 
       // Skip only fully-ingested sermons. A partial row (ingestion_status
-      // 'transcribed' — e.g. a prior chunking failure) is re-enqueued so it
-      // resumes from the stored transcript instead of being stranded forever;
-      // ingestSermon's resume path skips the re-download + transcription.
-      const existing = req.videoId ? getSermonByVideoId(req.videoId) : null
-      if (existing && existing.ingestion_status === 'done') {
+      // 'transcribed' — e.g. a prior chunking failure) is absent from doneIds,
+      // so it's re-enqueued and resumes from the stored transcript instead of
+      // being stranded forever; ingestSermon's resume path skips the
+      // re-download + transcription.
+      if (req.videoId && doneIds.has(req.videoId)) {
         skipped++
         continue
       }
