@@ -217,6 +217,14 @@ In dev, the Vite dev server (`:5173`) serves the SPA and proxies `/api`, `/asset
 
 The app is an installable **PWA**: `vite-plugin-pwa` generates `sw.js` + `manifest.webmanifest` (served from `public/app` by the catch-all). The service worker precaches the app shell and runtime-caches only public read-only data (`/api/transcripts/*`, `/api/themes`, `/assets/*`); the live chat SSE (`/api/chat`) and secret-gated `/api/admin/*` and `/api/db/*` routes are deliberately network-only. Icons live in `public/assets/` (`pwa-192x192.png`, `pwa-512x512.png`, `maskable-512x512.png`).
 
+### `packages/sdk/` — `@kerygma/sdk` client package
+A standalone, **dependency-free** TypeScript client for the public HTTP API, published separately for third parties (and other services) that want to query Kerygma programmatically without speaking MCP. It is a yarn **workspace** (`packages/*`) but is not wired into the app's `yarn build` — it builds independently with `yarn build:sdk` (`tsc` → `packages/sdk/dist`).
+- `packages/sdk/src/client.ts` — `KerygmaClient` class: typed wrappers over `GET /api/transcripts/*`, `GET /api/themes`, the admin/db reads (`X-Admin-Secret`), and the chat SSE stream. `streamChat()` is an async generator yielding `delta`/`context`/`done`/`error` frames (the same `data: {json}\n\n` reader as the frontend); `ask()` drains it to `{ answer, sources }`. Non-2xx throws `ApiError`. Uses global `fetch`/Web Streams so it runs on Node 18+ and in browsers; a custom `fetch` can be injected.
+- `packages/sdk/src/types.ts` — the response-shape contract, a hand-maintained mirror of `frontend/src/api/types.ts` and `src/web/router.ts`.
+- `packages/sdk/src/index.ts` — public entry point (re-exports `KerygmaClient`, `ApiError`, and the contract types).
+
+This is the lighter-weight of Kerygma's two programmatic surfaces: the **MCP server** (`/mcp`, agent/Claude-Desktop oriented) and this **HTTP client SDK** (app/service oriented).
+
 ### `src/web/transcriptPdf.ts`
 `generateTranscriptPdf(sermon, transcript)` renders a transcript to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser; sub-second even for a 2-hour sermon). `transcriptPdfFilename(sermon)` builds the `theme__title__month-year.pdf` download name (theme falls back to `sermon`).
 

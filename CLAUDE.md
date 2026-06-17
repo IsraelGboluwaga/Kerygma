@@ -28,9 +28,11 @@ yarn test:watch       # run tests in watch mode
 yarn test:coverage    # run tests with v8 coverage report
 yarn typecheck        # type-check the backend (tsc --noEmit)
 yarn typecheck:web    # type-check the frontend (tsc --noEmit)
+yarn build:sdk        # build the @kerygma/sdk client package (→ packages/sdk/dist)
+yarn typecheck:sdk    # type-check the SDK package (tsc --noEmit)
 ```
 
-The frontend lives in `frontend/` as a yarn **workspace** — a single `yarn install` at the repo root installs both backend and frontend deps.
+The frontend lives in `frontend/` as a yarn **workspace**; the published client SDK lives in `packages/sdk/` as another. A single `yarn install` at the repo root installs backend, frontend, and SDK deps.
 
 ---
 
@@ -140,6 +142,12 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - The natural-language query parser (`parseTranscriptQuery`) uses `CHUNKING_MODEL` via `withRetry` and must degrade to `{}` (then a keyword fallback) rather than erroring.
 - A subject like "on faith" is a **topic** (relevance), not a formal **theme**. `searchSermonsByTopic` matches the term only in the Claude-derived `topics`/`summary` FTS columns and ranks by density (share of sections about it) — do not resolve a topic with a bare content keyword match, which for common words like "faith" matches nearly every sermon.
 
+### Client SDK (`packages/sdk`)
+- `@kerygma/sdk` is a **dependency-free, isomorphic** HTTP client (Node 18+ / browser) wrapping the `/api/*` JSON+SSE contract. Keep it zero-runtime-dependency — it uses global `fetch` and Web Streams only. Inject a custom `fetch` via the constructor for older runtimes rather than bundling one.
+- `packages/sdk/src/types.ts` is the **third** hand-maintained copy of the response contract (alongside `frontend/src/api/types.ts` and `src/web/router.ts`). Update all three when a route's shape changes.
+- The `streamChat` SSE reader is lifted verbatim from `frontend/src/api/client.ts` (same `data: {json}\n\n` framing). Keep the two readers behaviourally identical.
+- The SDK is **read/query only** — it must not gain ingestion/write helpers beyond what the public API already exposes (chat, transcripts, themes, and the secret-gated admin/db reads + `sync-api`).
+
 ### Testing
 - Tests live in `tests/`. Use Vitest.
 - Mock external I/O (Anthropic, Whisper, filesystem) — do not make real API calls in tests.
@@ -159,7 +167,7 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 |---|---|
 | New env variable | `README.md` (Configuration table) + `CLAUDE.md` (Environment variables table) + `.env.example` |
 | New/changed source file | `dev-docs/ARCHITECTURE.md` (File Responsibilities section) |
-| New/changed route or API | `dev-docs/ARCHITECTURE.md` (architecture diagram + data flows) |
+| New/changed route or API | `dev-docs/ARCHITECTURE.md` (architecture diagram + data flows). If the route is consumed by a client, also update the response shape in `frontend/src/api/types.ts` **and** `packages/sdk/src/types.ts` — these are three hand-maintained copies of the same contract |
 | Chat feature changes | `dev-docs/CHAT.md` |
 | MCP tool changes | `mcpConnect.md` (Available Tools table) + `README.md` (Available Tools section) |
 | New script in `package.json` | `README.md` (Development section) + `CLAUDE.md` (Common commands) |

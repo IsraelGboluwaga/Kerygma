@@ -266,6 +266,26 @@ What has Apostle Emmanuel Iren said about healing?
 
 ---
 
+## Client SDK (`@kerygma/sdk`)
+
+Besides MCP, Kerygma's public HTTP API can be consumed from any Node 18+ or browser app via the dependency-free TypeScript client in [`packages/sdk`](packages/sdk/README.md):
+
+```ts
+import { KerygmaClient } from '@kerygma/sdk'
+
+const kerygma = new KerygmaClient({ baseUrl: 'https://kerygma.example.com' })
+
+const { answer, sources } = await kerygma.ask([
+  { role: 'user', content: 'What was taught about grace?' },
+])
+
+const results = await kerygma.searchTranscripts({ topic: 'faith', year: 2024 })
+```
+
+It wraps the chat SSE stream (`streamChat`/`ask`), transcript search/view, themes, and the secret-gated admin/db reads. Build it with `yarn build:sdk`. See [`packages/sdk/README.md`](packages/sdk/README.md) for the full API.
+
+---
+
 ## Configuration
 
 | Variable | Required | Default | Description |
@@ -321,6 +341,8 @@ yarn build:web      # Vite build only
 yarn build:server   # esbuild backend only (fast transpile, no type check)
 yarn typecheck      # tsc --noEmit (backend)
 yarn typecheck:web  # tsc --noEmit (frontend)
+yarn build:sdk      # build the @kerygma/sdk client package (→ packages/sdk/dist)
+yarn typecheck:sdk  # tsc --noEmit (SDK)
 yarn start          # node dist/main.js
 yarn test           # vitest run
 yarn test:watch     # vitest in watch mode
