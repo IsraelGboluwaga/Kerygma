@@ -91,6 +91,9 @@ function resolveTranscriptSermons(f: TranscriptQuery): SermonRow[] {
     rows = searchSermonsByTopic(f.topic, MAX_TRANSCRIPT_RESULTS)
     // If the chunker never tagged the topic, it may still be a formal theme.
     if (rows.length === 0) rows = getSermonsByThemeName(f.topic)
+    // Last resort: treat the topic as a potential sermon title — catches cases
+    // like "did Apostle teach on Drive?" where "Drive" is the literal title.
+    if (rows.length === 0) rows = findSermonsByTitle(f.topic, MAX_TRANSCRIPT_RESULTS)
   } else if (f.theme) {
     rows = getSermonsByThemeName(f.theme)
     themeApplied = true
@@ -186,7 +189,7 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
   {
     name: 'find_sermon',
     description:
-      'Look up a specific sermon by (part of) its title and return its details, including the YouTube/video link where it can be watched. Use this whenever a member asks for the link, video, recording, or "where can I watch" of a named sermon, e.g. "what\'s the YouTube link for the sermon on the prodigal son?". Optionally narrow by speaker or date. If a matched sermon has no link on file, the result says so.',
+      'Look up a specific sermon by (part of) its title. Use this when a member asks for the link, video, or recording of a named sermon, OR when they ask "did X preach on Y" / "is there a sermon called Y" and Y could be a sermon title. Returns the sermon\'s details including the YouTube link if available. Optionally narrow by speaker or date. If no link is on file, the result says so.',
     input_schema: {
       type: 'object',
       properties: {
@@ -353,6 +356,7 @@ export function createRouter(anthropic: Anthropic): Hono {
       '- For questions that ask for a list or count of sermons — by month, date, speaker, or topic — use list_sermons. Its result is the COMPLETE, authoritative set for that filter. Present the full list and do NOT add disclaimers like "these are only the ones in the excerpts I was given".',
       '- Do not enumerate sermons from search_sermon_excerpts results; that tool returns a relevant sample and will miss sermons.',
       '- For the YouTube/video link, recording, or "where can I watch" of a specific named sermon, use find_sermon and share the YouTube link from the result. If the matched sermon has no link on file, say so plainly rather than inventing one.',
+      '- When the user asks "did X teach on [Y]" or "is there a sermon on [Y]", Y may be a sermon title rather than a content topic. Call find_sermon with Y as the title to check — a sermon can be titled "Drive" even if the word barely appears in the transcript.',
       'When the user refers to "that month", "that series", or a previous result, resolve it from the conversation, then call the tool with the concrete value.',
       'If the user sends a greeting or makes small talk, welcome them warmly as a sermon assistant and invite them to ask about the sermons — do not call any tool.',
     ].join('\n')
