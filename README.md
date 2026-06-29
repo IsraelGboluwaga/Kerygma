@@ -354,18 +354,6 @@ archives/sermons-2026-06-08T22-15-00Z.db
 
 These archives are created once on startup and then daily at 03:15 UTC. Litestream remains the primary recovery path for data loss because it restores from snapshots plus WAL files to the latest replicated transaction.
 
-### Database backups
-
-When all four R2 variables are configured, Litestream continuously replicates SQLite to the stable `sermons/` prefix in R2. The object names under `sermons/generations/...` are Litestream internals and are not meant to be human-readable.
-
-For visual confidence and manual downloads, the app also writes dated plain SQLite exports:
-
-```text
-archives/sermons-2026-06-08T22-15-00Z.db
-```
-
-These archives are created once on startup and then daily at 03:15 UTC. Litestream remains the primary recovery path for data loss because it restores from snapshots plus WAL files to the latest replicated transaction.
-
 ### Layer caching on rebuilds
 
 Docker layer order is optimised so code-only changes are fast:
