@@ -3,25 +3,23 @@
 ## Overview
 
 One Node.js process. One port (3000). Three jobs:
-1. **Web Chat UI** — lets church members ask questions about sermons
-2. **Admin UI** — lets a church admin ingest MP3 sermons via a password-gated form
+1. **React SPA (Vite)** — chat + transcripts for members, password-gated admin/status/DB pages; the backend serves the built bundle and exposes JSON/SSE under `/api/*`
+2. **Ingestion** — a church admin ingests MP3 sermons via the password-gated admin UI
 3. **MCP Server** — lets Claude Desktop (or any MCP client) query sermons programmatically
 
 ```
-Browser (Member)
-    │  GET  /              → Chat UI (HTML)
-    │  POST /              → SSE stream (Claude answer)
-    ▼
-Browser (Admin)
-    │  GET  /admin             → Admin UI (HTML, password-gated)
-    │  GET  /admin/live        → Live status dashboard (HTML)
-    │  GET  /admin/status      → Stats snapshot (JSON: queueDepth, lastSyncAt, sermonCount)
-    │  POST /admin/sync-api    → Trigger background API sync → 202 (protected)
-    │  GET  /admin/jobs        → List recent job statuses (protected)
-    │  GET  /admin/status/data → Live queue + phase snapshot (JSON, protected)
+Browser (React SPA — public/app, client-side routing)
+    │  GET  /, /transcripts, /admin, /admin/live, /lyrical-theology → SPA shell (index.html)
+    │  POST /api/chat              → SSE stream (Claude answer)
+    │  GET  /api/transcripts/search, /api/transcripts/:id, /api/themes
+    │  GET  /api/admin/status, /api/admin/jobs, /api/admin/status/data  (X-Admin-Secret)
+    │  POST /api/admin/sync-api    → Trigger background API sync → 202   (X-Admin-Secret)
+    │  GET  /api/db/:table         → Paginated table rows               (X-Admin-Secret)
+    │  GET  /transcripts/:id/download → on-demand PDF
     ▼
 Hono HTTP Server (:3000)
-    └── GET /health        → { ok: true }
+    ├── GET /health        → { ok: true }
+    └── GET * (catch-all)  → serves public/app static files, falls back to index.html
          │
     In-process job queue (FIFO, sequential — one job at a time)
          │
@@ -98,6 +96,7 @@ Typed functions for every DB operation:
 - `getTranscriptionBySermonId(id)` → `TranscriptionRow | null`
 - `completeSermon(id)` — sets `ingestion_status='done'`
 - `getSermonByVideoId(id)` → `SermonRow | null`
+- `getDoneVideoIds()` → `Set<string>` — all fully-ingested (`ingestion_status='done'`) video_ids; loaded once per API sync for in-memory skip checks
 - `getSermonsByDate(date)` → `SermonRow[]`
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
 - `getSpeakersMatchingFilter(filter)` → `string[]` — distinct speaker names matching substring
@@ -173,7 +172,9 @@ daily at 06:00 (`'0 6 * * *'`) for ongoing syncs. The phase switch is handled vi
 `setTimeout` that stops the frequent task and starts the daily one.
 
 `syncFromApi` enqueues every sermon from the API except those already fully ingested
-(`ingestion_status === 'done'`). Partial rows (status `transcribed` — e.g. a prior chunking
+(`ingestion_status === 'done'`). The done check is an in-memory `Set` membership test: the run
+loads all done video_ids up front via `getDoneVideoIds()` (one query) rather than a per-sermon
+DB lookup while walking the API roster. Partial rows (status `transcribed` — e.g. a prior chunking
 failure) are re-enqueued so they resume from the stored transcript via `ingestSermon`'s resume
 path, instead of being skipped forever. This is what lets a failed chunking auto-heal on the next
 sync rather than needing a manual re-ingest.
@@ -203,44 +204,21 @@ Registers 4 tools:
 
 Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`.
 
-### `src/web/dbHtml.ts`
-Returns the HTML string for the DB browser (`GET /lyrical-theology`). Contains:
-- A password field (uses `X-Admin-Secret` for data requests)
-- A table selector for `sermons`, `themes`, `transcriptions`, `chunks`, and `jobs`
-- A paginated data grid with BLOB columns rendered as `[blob: NB]`
-- Client-side fetch against `GET /lyrical-theology/:table?limit=&offset=`
+### `frontend/` — React + Vite SPA
+The entire member- and admin-facing UI is a single-page React app (TypeScript + Tailwind, mobile-responsive) built by Vite. The backend no longer renders HTML — it exposes JSON/SSE APIs under `/api/*` (plus the PDF download) and serves the built SPA. Key files:
+- `frontend/src/App.tsx` — `react-router-dom` routes: `/` (chat), `/transcripts`, `/transcripts/:videoId`, `/admin`, `/admin/live`, `/lyrical-theology`, and a 404
+- `frontend/src/api/client.ts` — typed fetch wrappers + the chat SSE reader (`streamChat`, an async generator yielding `delta`/`context`/`done`/`error` frames); `frontend/src/api/types.ts` mirrors the backend response shapes
+- `frontend/src/pages/ChatPage.tsx` — message thread, streaming assistant bubbles (markdown via `marked`), collapsible "Sources", auto-growing input
+- `frontend/src/pages/TranscriptsPage.tsx` — NL search box + structured filters (month/year/theme/speaker), responsive results table
+- `frontend/src/pages/TranscriptViewPage.tsx` — single transcript, timestamped segments or paragraph fallback, Download PDF link
+- `frontend/src/pages/AdminPage.tsx` — secret-gated stats + recent jobs, "Sync Now", 30 s auto-refresh
+- `frontend/src/pages/LiveStatusPage.tsx` — phase stepper (Download → Transcribe → Chunk → Embed), queue + recent tables, polls every 2 s
+- `frontend/src/pages/DbBrowserPage.tsx` — secret-gated paginated table explorer (BLOBs shown as `[blob: NB]`)
+- The admin secret lives in `sessionStorage` (`frontend/src/lib/useAdminSecret.ts`) and is sent as `X-Admin-Secret`
 
-### `src/web/chatHtml.ts`
-Returns the HTML string for the member-facing chat UI. Contains:
-- A message thread view (user bubbles right, assistant bubbles left)
-- Client-side SSE reader that streams Claude's response token by token
-- A collapsible "Sources" widget showing which sermon chunks informed each answer
-- New Conversation button
+In dev, the Vite dev server (`:5173`) serves the SPA and proxies `/api`, `/assets`, `/health`, `/mcp`, and `/transcripts/*/download` to the Hono server (`:3000`). In production, `yarn build:web` emits the SPA to `public/app/` and Hono serves it.
 
-### `src/web/adminHtml.ts`
-Returns the HTML string for the admin dashboard page. Contains:
-- A password field — stats and job list are loaded only after the correct `ADMIN_SECRET` is accepted (verified via `GET /admin/status`; 401 keeps the data hidden)
-- A stats row: sermons indexed, queue depth, last sync timestamp
-- A "Sync Now" button that POSTs to `POST /admin/sync-api` and refreshes the job list after 3 s
-- A recent jobs table (title, status badge, message); auto-refreshes every 30 s
-- A "Live status →" link to `/admin/live`
-
-### `src/web/statusHtml.ts`
-Returns the HTML string for the live status dashboard (`GET /admin/live`). Contains:
-- A password field (remembered in `sessionStorage`) so it can be shared with the admin page
-- A "Now Processing" phase stepper (Download → Transcribe → Chunk → Embed) for the currently running job, driven by the job's `phase` field
-- A queue list showing each waiting job's 1-based position, plus a recent-jobs table
-- Client-side JS that polls `GET /admin/status/data` every 2s — progress lives in structured job state, not in the logs
-
-### `src/web/transcriptsHtml.ts`
-Returns the HTML string for the transcripts page (`GET /transcripts`). Contains:
-- A natural-language search box (e.g. "sermons in February 2023", "all sermons on faith")
-- A collapsible structured-filter panel: month + year + theme (dropdown populated server-side from `listThemes()`) + speaker
-- A mobile-responsive results table (real `<table>` on wide screens, stacked cards under 640px) with title (linked to the transcript view), formatted date, theme tag, excerpt, and a Download PDF link
-- Client-side JS that calls `GET /transcripts/search` and renders the rows
-
-### `src/web/transcriptViewHtml.ts`
-Returns the HTML string for a single viewable transcript (`GET /transcripts/:videoId`). Renders the sermon title + meta, a "Download PDF" button, and the transcript body — timestamped per segment when `transcriptions.segments` is present, otherwise plain paragraphs from the verbatim text.
+The app is an installable **PWA**: `vite-plugin-pwa` generates `sw.js` + `manifest.webmanifest` (served from `public/app` by the catch-all). The service worker precaches the app shell and runtime-caches only public read-only data (`/api/transcripts/*`, `/api/themes`, `/assets/*`); the live chat SSE (`/api/chat`) and secret-gated `/api/admin/*` and `/api/db/*` routes are deliberately network-only. Icons live in `public/assets/` (`pwa-192x192.png`, `pwa-512x512.png`, `maskable-512x512.png`).
 
 ### `src/web/transcriptPdf.ts`
 `generateTranscriptPdf(sermon, transcript)` renders a transcript to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser; sub-second even for a 2-hour sermon). `transcriptPdfFilename(sermon)` builds the `theme__title__month-year.pdf` download name (theme falls back to `sermon`).
@@ -252,29 +230,30 @@ Returns the HTML string for a single viewable transcript (`GET /transcripts/:vid
 Pure formatting helpers shared by the transcripts table, view, and PDF: `formatSermonDate` ("4 July 2021"), `humanizeDatePrefix` ("February 2023"), `monthYearSlug` ("july-2021"), and `slugify`.
 
 ### `src/web/router.ts`
-Hono app wiring all routes:
+Hono app wiring all routes. The UI pages are client-side routes served by the SPA catch-all; this layer is JSON/SSE + static serving only.
 
-**Chat (`/`)**
-- `GET /` — serves the chat UI
-- `POST /` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given two read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`): `search_sermon_excerpts` (FTS5 chunk search, a relevant sample) and `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
+**Chat**
+- `POST /api/chat` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given two read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`): `search_sermon_excerpts` (FTS5 chunk search, a relevant sample) and `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
 
-**Transcripts (`/transcripts/*`)** — public, read-only transcript delivery
-- `GET /transcripts` — serves the transcripts search/table UI (HTML)
-- `GET /transcripts/search` — accepts `q` (natural-language, parsed via `parseTranscriptQuery`) **or** structured `month`/`year`/`theme`/`topic`/`speaker` params; returns `{ interpreted, sermons[] }`. Filters combine (base set by priority topic > theme > date > speaker, then the rest applied as predicates). `topic` is a **relevance** search over each sermon's Claude-derived section topics/summaries (`searchSermonsByTopic`), ranked by density — so "faith" returns sermons *geared towards* faith, not every sermon that says the word. Registered before `/transcripts/:videoId` so "search" isn't read as a video id
-- `GET /transcripts/:videoId` — serves the viewable transcript (HTML, rendered from `transcriptions.segments`)
-- `GET /transcripts/:videoId/download` — streams an on-demand PDF (`application/pdf`, `Content-Disposition: attachment`)
+**Transcripts** — public, read-only transcript delivery
+- `GET /api/themes` — returns `{ id, name }[]` for the structured filter dropdown
+- `GET /api/transcripts/search` — accepts `q` (natural-language, parsed via `parseTranscriptQuery`) **or** structured `month`/`year`/`theme`/`topic`/`speaker` params; returns `{ interpreted, sermons[] }`. Filters combine (base set by priority topic > theme > date > speaker, then the rest applied as predicates). `topic` is a **relevance** search over each sermon's Claude-derived section topics/summaries (`searchSermonsByTopic`), ranked by density. Registered before `/api/transcripts/:videoId` so "search" isn't read as a video id
+- `GET /api/transcripts/:videoId` — returns `{ sermon, segments, transcript, hasTranscript }` (rendered client-side from `transcriptions.segments`, or paragraphs from the verbatim text)
+- `GET /transcripts/:videoId/download` — streams an on-demand PDF (`application/pdf`, `Content-Disposition: attachment`); the SPA links to it directly
 
-**Admin (`/admin/*`)** — data/action routes protected by `X-Admin-Secret` middleware; the two HTML pages (`/admin`, `/admin/live`) are public and prompt for the secret client-side
-- `GET /admin` — serves the admin dashboard UI
-- `GET /admin/live` — serves the live phase/queue status dashboard (HTML)
-- `GET /admin/status` — returns `{ queueDepth, lastSyncAt, sermonCount }` (protected)
-- `POST /admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202, protected)
-- `GET /admin/jobs` — returns recent job list (up to 50, protected)
-- `GET /admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position` (protected)
+**Admin** — protected by `X-Admin-Secret` middleware on `/api/admin/*`
+- `GET /api/admin/status` — returns `{ queueDepth, lastSyncAt, sermonCount }`
+- `POST /api/admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202)
+- `GET /api/admin/jobs` — returns recent job list (up to 50)
+- `GET /api/admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position`
 
-**DB Browser (`/lyrical-theology/*`)** — password-gated read-only table explorer
-- `GET /lyrical-theology` — serves the DB browser UI (HTML)
-- `GET /lyrical-theology/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, `jobs`, or `missing_sermons` (protected); accepts `limit` and `offset` query params
+**DB Browser** — protected by `X-Admin-Secret` middleware on `/api/db/*`
+- `GET /api/db/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, `jobs`, or `missing_sermons`; accepts `limit` and `offset` query params
+
+**Static + SPA**
+- `GET /favicon.ico`, `GET /assets/:file` — logos/icons from `public/assets`
+- `GET /health` — `{ ok: true }`
+- `GET *` (catch-all, registered last) — serves files from the Vite build in `public/app/`; falls back to `index.html` for any unmatched path so client-side routes resolve. Content-hashed `/static/*` assets get a 1-year immutable cache
 
 ### `src/main.ts`
 Sequential startup:
@@ -290,10 +269,9 @@ Sequential startup:
 ## Data Flow: Web Chat
 
 ```
-Member opens browser → GET /
-    → chatHtml served
+Member opens browser → GET / → SPA shell (public/app/index.html) → ChatPage
 
-Member types question → POST / { messages: [...] }
+Member types question → POST /api/chat { messages: [...] }
     → 404 if countSermons() === 0
     → agentic loop (≤6 steps), each step = anthropic.messages.stream(... CHAT_TOOLS):
         stream { type: 'delta', text }            token by token
@@ -301,6 +279,7 @@ Member types question → POST / { messages: [...] }
         else runChatTool() per tool_use block:
             search_sermon_excerpts → searchChunks(query, 10)   relevant sample
             list_sermons           → resolveTranscriptSermons  COMPLETE roster
+            find_sermon            → findSermonsByTitle        named sermon + YouTube link
         { type: 'context', sources }              cumulative citations
         append tool_result blocks, continue
     → { type: 'done' }
@@ -310,10 +289,10 @@ Member types question → POST / { messages: [...] }
 ## Data Flow: Transcripts
 
 ```
-Member opens browser → GET /transcripts
-    → transcriptsHtml served (theme dropdown filled from listThemes())
+Member opens browser → GET /transcripts → SPA TranscriptsPage
+    → GET /api/themes fills the theme dropdown (listThemes())
 
-Member searches → GET /transcripts/search?q=... (or ?month=&year=&theme=&topic=&speaker=)
+Member searches → GET /api/transcripts/search?q=... (or ?month=&year=&theme=&topic=&speaker=)
     → q present:  parseTranscriptQuery() → { date?, topic?, speaker? }
                   (nothing parsed → searchSermons() keyword fallback)
       structured: month+year → date prefix; theme/topic/speaker applied directly
@@ -323,8 +302,8 @@ Member searches → GET /transcripts/search?q=... (or ?month=&year=&theme=&topic
     → JSON { interpreted, sermons: [{ title, dateFormatted, theme, excerpt,
              hasTranscript, viewUrl, downloadUrl }] }
 
-Member clicks a title → GET /transcripts/:videoId
-    → getTranscriptionBySermonId() → transcriptViewHtml (timestamped segments)
+Member clicks a title → SPA route /transcripts/:videoId → GET /api/transcripts/:videoId
+    → getTranscriptionBySermonId() → JSON { sermon, segments, transcript } (timestamped segments)
 
 Member clicks Download → GET /transcripts/:videoId/download
     → generateTranscriptPdf(sermon, transcript)  pdfkit, on demand
@@ -483,19 +462,20 @@ The image uses a two-stage build to keep the runtime image small:
 ```
 Stage 1 — builder (node:20, Debian Bookworm)
     apt-get install build-essential python3  ← compile better-sqlite3 native addon
-    yarn install --frozen-lockfile
-    yarn build                               ← esbuild → dist/ (transpile only, no type check)
+    COPY package.json yarn.lock + frontend/package.json  ← workspace manifests
+    yarn install --frozen-lockfile           ← installs backend + frontend (workspaces)
+    yarn build                               ← vite build → public/app/, esbuild → dist/
 
 Stage 2 — runtime (node:20-slim, same Debian Bookworm)
     apt-get install ffmpeg           ← re-encodes audio > 25 MB before Whisper API upload
                     libstdc++6       ← C++ runtime stripped from node:20-slim, needed by
                     libgomp1            better-sqlite3
-    COPY dist/ node_modules/ package.json from builder
+    COPY dist/ node_modules/ package.json public/ from builder  ← public/ includes the SPA build
 ```
 
 Both stages use the same Debian Bookworm base so compiled `.node` binaries are portable between them (same glibc ABI).
 
-**Layer caching:** `apt-get` and `yarn install` layers are cached until `yarn.lock` changes. Code changes only invalidate the final `COPY . .` + `yarn build` layers, making rebuilds fast.
+**Layer caching:** `apt-get` and `yarn install` layers are cached until `yarn.lock` or either `package.json` changes. Code changes only invalidate the final `COPY . .` + `yarn build` layers, making rebuilds fast.
 
 ---
 

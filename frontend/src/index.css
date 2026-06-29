@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme custom properties ───────────────────────────────────────────────── */
+:root {
+  --c-bg: #000;
+  --c-surface: #0d0d0d;
+  --c-surface-2: #0a0a0a;
+  --c-surface-3: #111;
+  --c-text: #fff;
+  --c-text-2: #e5e5e5;
+  --c-text-4: #888;
+  --c-text-6: #555;
+  --c-text-7: #444;
+  --c-border: #1f1f1f;
+  --c-border-2: #2a2a2a;
+  --c-accent-dim-bg: #5a2222;
+  --c-accent-selected-bg: #1a0808;
+  --c-err-bg: #1c0e0e;
+  --c-err-text: #ef8888;
+  --c-err-border: #5a2222;
+  --c-badge-q-bg: #1a1500; --c-badge-q-text: #c4a010;
+  --c-badge-r-bg: #00101a; --c-badge-r-text: #3a9fd6;
+  --c-badge-d-bg: #001a08; --c-badge-d-text: #3abf6e;
+  --c-badge-f-bg: #1c0e0e; --c-badge-f-text: #ef8888;
+  --c-scrollbar: #222;
+}
+
+[data-theme="light"] {
+  --c-bg: #f8f7f5;
+  --c-surface: #ffffff;
+  --c-surface-2: #f0eeeb;
+  --c-surface-3: #f4f3f0;
+  --c-text: #111;
+  --c-text-2: #2a2a2a;
+  --c-text-4: #6b6b6b;
+  --c-text-6: #9a9a9a;
+  --c-text-7: #b5b5b5;
+  --c-border: #e4e2de;
+  --c-border-2: #d4d2ce;
+  --c-accent-dim-bg: #f5dada;
+  --c-accent-selected-bg: #fff0ef;
+  --c-err-bg: #fff5f5;
+  --c-err-text: #cc3333;
+  --c-err-border: #f0c0c0;
+  --c-badge-q-bg: #fffbeb; --c-badge-q-text: #92400e;
+  --c-badge-r-bg: #eff6ff; --c-badge-r-text: #1e40af;
+  --c-badge-d-bg: #f0fdf4; --c-badge-d-text: #166534;
+  --c-badge-f-bg: #fff5f5; --c-badge-f-text: #991b1b;
+  --c-scrollbar: #c8c6c2;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    /*
+     * `100%` alone is unreliable on iOS Safari: the dynamic toolbar makes the
+     * page taller than the visual viewport, so the whole body scrolls and a
+     * pinned bottom bar (e.g. the chat composer) drifts up out of view.
+     * `100dvh` tracks the *dynamic* viewport, keeping the layout exactly one
+     * screen tall so inner panes scroll instead of the page. `100%` stays as a
+     * fallback for browsers without `dvh` support.
+     */
+    height: 100%;
+    height: 100dvh;
+  }
+
+  body {
+    background-color: var(--c-bg);
+    color: var(--c-text);
+    @apply font-sans antialiased;
+  }
+}
+
+@layer components {
+  /* Shared button styles matching the original red-accent look. */
+  .btn-primary {
+    @apply bg-accent text-white rounded-lg px-4 py-2 text-sm tracking-wide
+      transition-colors hover:bg-accent-hover
+      disabled:bg-accent-muted disabled:text-[#8a5555] disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply border border-line-strong text-ink-dim rounded-md px-3 py-1.5 text-sm
+      transition-colors hover:border-accent hover:text-ink-bright;
+  }
+
+  .card {
+    @apply bg-surface border border-line rounded-lg p-6;
+  }
+
+  /*
+   * `text-base` (16px) on mobile prevents iOS Safari from auto-zooming the
+   * viewport when a field gains focus — it only zooms when the font-size is
+   * below 16px. Desktop (sm+) keeps the tighter 14px look.
+   */
+  .field {
+    @apply bg-surface-sunken text-ink-bright border border-line-strong rounded-md
+      px-3 py-2 text-base sm:text-sm outline-none transition-colors focus:border-accent
+      placeholder:text-ink-ghost;
+  }
+
+  .badge {
+    @apply inline-block rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+  .badge-queued  { @apply bg-badge-queued-bg  text-badge-queued-fg; }
+  .badge-running { @apply bg-badge-running-bg text-badge-running-fg; }
+  .badge-done    { @apply bg-badge-done-bg    text-badge-done-fg; }
+  .badge-failed  { @apply bg-badge-failed-bg  text-badge-failed-fg; }
+
+  /* Markdown rendered inside an assistant chat bubble. */
+  .prose-chat p { @apply mb-2 last:mb-0; }
+  .prose-chat ul { @apply list-disc pl-6 mb-2; }
+  .prose-chat ol { @apply list-decimal pl-6 mb-2; }
+  .prose-chat li { @apply mb-1; }
+  .prose-chat strong { @apply font-semibold text-ink-bright; }
+  .prose-chat h1, .prose-chat h2, .prose-chat h3 {
+    @apply font-semibold text-ink-bright mt-2 mb-1;
+  }
+  .prose-chat a { @apply text-accent underline; }
+}
+
+/* Thin scrollbars, adapts to theme. */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--c-scrollbar); border-radius: 3px; }

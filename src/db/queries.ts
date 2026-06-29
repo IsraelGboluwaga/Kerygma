@@ -248,6 +248,20 @@ export function getSermonByVideoId(videoId: string): SermonRow | null {
   )
 }
 
+/**
+ * All video_ids that are fully ingested (`ingestion_status = 'done'`), as a Set
+ * for O(1) membership checks. Loaded once per API sync so the scheduler can skip
+ * already-ingested sermons without a per-sermon row lookup. Partial rows
+ * (e.g. 'transcribed') are intentionally excluded so they get re-enqueued and
+ * resume from the stored transcript.
+ */
+export function getDoneVideoIds(): Set<string> {
+  const rows = getDb()
+    .prepare(`SELECT video_id FROM sermons WHERE ingestion_status = 'done'`)
+    .all() as { video_id: string }[]
+  return new Set(rows.map((r) => r.video_id))
+}
+
 export function getSermonsByDate(date: string): SermonRow[] {
   return getDb()
     .prepare(`${SERMON_SELECT} WHERE s.date LIKE ? AND s.ingestion_status = 'done' ORDER BY s.date DESC`)
@@ -322,6 +336,23 @@ export function searchSermonsByTopic(term: string, limit = 50): SermonRow[] {
        LIMIT ?`
     )
     .all(match, limit) as SermonRow[]
+}
+
+// Find sermons whose title matches the given text (case-insensitive substring).
+// Used by the chat's find_sermon tool to resolve a sermon a member names so we
+// can hand back its details — notably the YouTube link stored in webpage_url.
+export function findSermonsByTitle(query: string, limit = 10): SermonRow[] {
+  return getDb()
+    .prepare(
+      `SELECT s.*, t.name AS theme
+       FROM sermons s
+       LEFT JOIN themes t ON t.id = s.theme_id
+       WHERE s.ingestion_status = 'done'
+         AND LOWER(s.title) LIKE '%' || LOWER(?) || '%'
+       ORDER BY s.date DESC
+       LIMIT ?`
+    )
+    .all(query, limit) as SermonRow[]
 }
 
 export function listThemes(): ThemeRow[] {
@@ -548,12 +579,40 @@ export function countSermons(): number {
 }
 
 export function getSpeakersMatchingFilter(filter: string): string[] {
+  const canonical = resolveAliasToCanonical(filter)
+  const effectiveFilter = canonical ?? filter
   const rows = getDb()
     .prepare(
       `SELECT DISTINCT speaker FROM sermons
        WHERE speaker IS NOT NULL AND ingestion_status = 'done' AND LOWER(speaker) LIKE LOWER(?)
        ORDER BY speaker`
     )
-    .all(`%${filter}%`) as { speaker: string }[]
+    .all(`%${effectiveFilter}%`) as { speaker: string }[]
   return rows.map((r) => r.speaker)
+}
+
+export function resolveAliasToCanonical(filter: string): string | null {
+  const row = getDb()
+    .prepare(`SELECT canonical_name FROM speaker_aliases WHERE alias = LOWER(?)`)
+    .get(filter.trim()) as { canonical_name: string } | undefined
+  return row?.canonical_name ?? null
+}
+
+export function upsertSpeakerAlias(alias: string, canonicalName: string): void {
+  getDb()
+    .prepare(`INSERT OR REPLACE INTO speaker_aliases (alias, canonical_name) VALUES (LOWER(?), ?)`)
+    .run(alias.trim(), canonicalName)
+}
+
+export function deleteSpeakerAlias(alias: string): void {
+  getDb()
+    .prepare(`DELETE FROM speaker_aliases WHERE alias = LOWER(?)`)
+    .run(alias.trim())
+}
+
+export function listSpeakerAliases(): { alias: string; canonicalName: string }[] {
+  const rows = getDb()
+    .prepare(`SELECT alias, canonical_name FROM speaker_aliases ORDER BY canonical_name, alias`)
+    .all() as { alias: string; canonical_name: string }[]
+  return rows.map((r) => ({ alias: r.alias, canonicalName: r.canonical_name }))
 }

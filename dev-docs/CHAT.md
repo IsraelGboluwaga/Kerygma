@@ -14,10 +14,10 @@ The chat is **agentic**: instead of pre-running one search and stuffing the resu
 
 ### 1. User sends a message
 
-The frontend (`src/web/chatHtml.ts`) maintains a `messages` array in memory for the duration of the session. When the user submits:
+The frontend (`frontend/src/pages/ChatPage.tsx`) keeps the conversation in React state for the duration of the session. When the user submits:
 
-- The message is appended to `messages` as `{ role: 'user', content: text }`
-- The entire `messages` array is POST'd to `/`
+- The message is appended as `{ role: 'user', content: text }`
+- The entire conversation is POST'd to `/api/chat` via `streamChat()` (`frontend/src/api/client.ts`)
 - A typing indicator appears while waiting
 
 ### 2. Backend sets up the agentic loop
@@ -30,16 +30,19 @@ The POST handler in `src/web/router.ts`:
 
 ### 3. Tools
 
-Two read-only tools, dispatched by `runChatTool()` in `src/web/router.ts`:
+Three read-only tools, dispatched by `runChatTool()` in `src/web/router.ts`:
 
 | Tool | Backed by | Use for |
 |------|-----------|---------|
 | `search_sermon_excerpts` | `searchChunks()` (FTS5, top 10) | "What does X teach about Y" — returns a relevant **sample** of excerpts with citations |
 | `list_sermons` | `resolveTranscriptSermons()` (date / topic / speaker) | "List/count sermons in month X / by speaker / about topic" — returns the **complete** matching roster |
+| `find_sermon` | `findSermonsByTitle()` (title `LIKE`, optional speaker/date) | "What's the YouTube link / video / recording for the sermon on X" — returns the named sermon's details including its **YouTube link** (`webpage_url`) |
 
 `search_sermon_excerpts` still uses `sanitizeFtsQuery()` under the hood (strips FTS5 special chars and stopwords, wraps tokens in `OR`). `list_sermons` resolves a `{date, topic, speaker}` filter to the full sermon list — by priority topic > theme > date > speaker, then applies the remaining filters as predicates (the same resolver the transcripts page uses). **This is the completeness guarantee:** a month query hits `getSermonsByDate('2023-03')` and returns every sermon in March, not whatever ranked in a keyword search.
 
-The system prompt steers tool selection explicitly: use `list_sermons` (not excerpt search) for any list/count, treat its result as the authoritative complete set, and don't caveat with "these are only the ones in the excerpts I was given" — the exact failure mode that motivated this design.
+`find_sermon` matches the requested text against the sermon **title** (case-insensitive substring), so a member can name a sermon and get its watch link without knowing the exact title. When the matched sermon has no `webpage_url` on file the result says `YouTube: (no link on file)` and the system prompt instructs Claude to say so plainly rather than invent a URL.
+
+The system prompt steers tool selection explicitly: use `list_sermons` (not excerpt search) for any list/count, treat its result as the authoritative complete set, and don't caveat with "these are only the ones in the excerpts I was given" — the exact failure mode that motivated this design. For a link/video request about a named sermon, it routes to `find_sermon`.
 
 ### 4. Agentic loop & streaming
 
@@ -74,12 +77,12 @@ Claude is called with:
 
 ### 6. Frontend renders the response
 
-`readStream()` in `chatHtml.ts` reads the SSE stream:
+`ChatPage` consumes the `streamChat()` async generator, which parses the SSE frames:
 
-- On `context` — stores sources and calls `applySources()` to attach/refresh the `<details>` (works even if the bubble already exists)
-- On `delta` — creates the assistant bubble on first token, then appends text incrementally (streaming effect)
-- On `done` — pushes the completed assistant message to the `messages` array for future turns
-- On `error` — removes the typing indicator and shows an error banner
+- On `context` — stores sources on the current assistant turn; the `<details>` attaches/refreshes even if it arrives before the answer text
+- On `delta` — the assistant bubble replaces the typing dots on the first token, then markdown (`marked`) re-renders incrementally as text accumulates
+- On `done` — the turn is marked complete and stays in state for future turns
+- On `error` — drops the empty assistant placeholder and shows an error banner
 
 Sources appear as a collapsible `<details>` element below the response bubble, showing sermon title, date, and (for excerpts) timestamp. The `section_name` from the chunk is not surfaced in the Sources widget — only the sermon-level metadata is shown.
 
@@ -89,7 +92,8 @@ Sources appear as a collapsible `<details>` element below the response bubble, s
 
 The entire conversation history is kept client-side and sent to the backend on every request. There is no server-side session. This means:
 
-- Conversation context is lost on page refresh (by design — the "New conversation" button does a `location.reload()`)
+- Conversations persist across page refreshes, tab closes, and browser restarts — `ConversationsContext` mirrors all conversations (and the active tab) to `localStorage` under the `kerygma_convos` key, so a returning member finds their chats waiting. Use the "New" button / `+` tab to start a fresh conversation; closing a tab removes that conversation from the saved state.
+- Persistence is per-device/browser (no auth, no server-side session), and transient flags are sanitised on load: `busy`/`error` reset and any mid-stream `streaming` turn is finalised so a reload never restores a stuck "typing" bubble.
 - Claude can reference earlier exchanges in follow-up answers
 - Each turn independently re-runs the agentic loop and re-queries the DB, so answers always reflect the current library — and "that month/series" references resolve from the conversation before the tool call
 
@@ -107,8 +111,10 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 |-----------|-------|-----------|
 | Chunks per `search_sermon_excerpts` call | 10 | `router.ts` → `searchChunks(query, 10)` |
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
+| Sermons per `find_sermon` call | up to 10 | `router.ts` → `findSermonsByTitle(title, 10)` |
 | Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
 | Max tokens per Claude turn | 3072 | `router.ts` → `max_tokens: 3072` |
+| Chat rate limit | 30 req/min per IP | `router.ts` → `POST /api/chat` |
 | Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
 
 Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because it groups results by sermon and presents them structured rather than as a synthesised narrative.
@@ -119,8 +125,9 @@ Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because
 
 | File | Role |
 |------|------|
-| `src/web/chatHtml.ts` | Frontend UI, SSE parsing, message rendering, `applySources()` |
-| `src/web/router.ts` | `POST /` handler, agentic loop, `CHAT_TOOLS`, `runChatTool()` |
+| `frontend/src/pages/ChatPage.tsx` | Chat UI, message rendering, streaming bubbles, sources `<details>` |
+| `frontend/src/api/client.ts` | `streamChat()` — SSE reader / async generator of chat events |
+| `src/web/router.ts` | `POST /api/chat` handler, agentic loop, `CHAT_TOOLS`, `runChatTool()` |
 | `src/db/queries.ts` | `searchChunks()`, `getSermonsByDate()`, `sanitizeFtsQuery()`, FTS5 query |
 | `src/ingestion/chunker.ts` | `formatTimestamp()` used in context headers |
 | `src/logger.ts` | Runtime logging (Winston) |

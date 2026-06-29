@@ -55,6 +55,55 @@ describe('runChatTool — list_sermons', () => {
   })
 })
 
+describe('runChatTool — find_sermon', () => {
+  it('returns the YouTube link for a sermon matched by title', () => {
+    saveSermon(
+      sermon({
+        title: 'The Prodigal Son',
+        date: '2023-04-02',
+        speaker: 'Pst. Laju Iren',
+        webpage_url: 'https://youtube.com/watch?v=abc123',
+      })
+    )
+    saveSermon(sermon({ title: 'Something Else', date: '2023-04-09' }))
+
+    const { text, sources } = runChatTool('find_sermon', { title: 'prodigal' })
+    expect(text).toContain('The Prodigal Son')
+    expect(text).toContain('YouTube: https://youtube.com/watch?v=abc123')
+    expect(text).not.toContain('Something Else')
+    expect(sources[0]).toMatchObject({ title: 'The Prodigal Son', date: '2023-04-02' })
+  })
+
+  it('says so when the matched sermon has no link on file', () => {
+    saveSermon(sermon({ title: 'No Link Sermon', date: '2023-05-01' }))
+
+    const { text } = runChatTool('find_sermon', { title: 'No Link' })
+    expect(text).toContain('No Link Sermon')
+    expect(text).toContain('YouTube: (no link on file)')
+  })
+
+  it('narrows by speaker', () => {
+    saveSermon(
+      sermon({ title: 'Grace', date: '2023-06-01', speaker: 'Pst. Laju Iren', webpage_url: 'https://youtu.be/laju' })
+    )
+    saveSermon(
+      sermon({ title: 'Grace', date: '2023-06-08', speaker: 'Someone Else', webpage_url: 'https://youtu.be/other' })
+    )
+
+    const { text } = runChatTool('find_sermon', { title: 'grace', speaker: 'Laju' })
+    expect(text).toContain('https://youtu.be/laju')
+    expect(text).not.toContain('https://youtu.be/other')
+  })
+
+  it('reports no match when the title is unknown', () => {
+    saveSermon(sermon({ title: 'Faith', date: '2023-07-01' }))
+
+    const { text, sources } = runChatTool('find_sermon', { title: 'nonexistent topic' })
+    expect(text).toContain('No sermon found')
+    expect(sources).toHaveLength(0)
+  })
+})
+
 describe('runChatTool — search_sermon_excerpts', () => {
   it('returns relevant excerpts with citations', () => {
     const id = saveSermon(sermon({ title: 'On Faith', date: '2023-03-01' }))
