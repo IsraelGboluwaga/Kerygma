@@ -88,6 +88,23 @@ export interface StatusData {
   jobs: Job[]
 }
 
+export type BookStatus = 'generating' | 'done' | 'failed'
+
+export interface Book {
+  id: number
+  topic: string
+  title: string | null
+  status: BookStatus
+  createdAt: string
+  downloadUrl: string
+}
+
+export interface BookGenResponse {
+  jobId: string
+  bookId: number
+  downloadUrl: string
+}
+
 export interface DbTablePage {
   columns: string[]
   rows: Record<string, unknown>[]

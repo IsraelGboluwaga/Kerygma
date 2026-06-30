@@ -11,6 +11,11 @@ const envSchema = z.object({
   MAX_AUDIO_DURATION_SECONDS: z.coerce.number().int().positive().default(7200),
   CLAUDE_MODEL: z.string().default('claude-sonnet-4-6'),
   CHUNKING_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+  // Model used to draft book chapters. Falls back to CLAUDE_MODEL at the use
+  // site (src/book/generator.ts) so books and chat share a model by default,
+  // but the ministry can dial book quality/cost independently (e.g. Haiku for
+  // cheap drafts, Opus for the highest-quality prose).
+  BOOK_MODEL: z.string().optional(),
   SERMON_BASE_URL: z.string().url('SERMON_BASE_URL must be a valid URL'),
   AUDIO_BASE_URL: z.string().url('AUDIO_BASE_URL must be a valid URL'),
   R2_ACCOUNT_ID: z.string().optional(),

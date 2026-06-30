@@ -281,6 +281,7 @@ What has Apostle Emmanuel Iren said about healing?
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
+| `BOOK_MODEL` | No | `CLAUDE_MODEL` | Claude model used to draft book chapters (falls back to `CLAUDE_MODEL`) |
 | `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream replication and dated archive exports |
 | `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication and dated archive exports |
 | `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key for Litestream replication and dated archive exports |
@@ -299,6 +300,8 @@ chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp
 chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 jobs           (id, title, download_url, payload, status, phase, message, error, created_at, started_at, completed_at)
 missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, theme, kind, reason, created_at, updated_at)
+books          (id, topic, title, status, sources, created_at)
+book_chapters  (id, book_id, idx, heading, body)
 ```
 
 `video_id` comes from the sermon API's `_id` field, or falls back to `SHA256(downloadUrl).slice(0, 16)` for manually-ingested URLs.
@@ -307,6 +310,27 @@ missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, 
 `ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete.
 `transcriptions` stores the full plain-text transcript and JSON segment array separately from `sermons` to keep sermon queries fast.
 `missing_sermons` holds sermons that failed to ingest, keyed by `video_id` so retries upsert and a successful ingest clears the row. `kind` classifies the failure (`no_audio` — `download_url` was just `AUDIO_BASE_URL` with no path; `too_long`; `timeout` — transient, retried on next sync; `error`). Server-restart failures are not recorded. Browse it under `/lyrical-theology`.
+`books` holds generated book drafts (`status`: `generating` → `done`/`failed`; `sources` is a JSON array of the sermons the draft was grounded in); `book_chapters` holds each book's chapters in order. See **Book generation** below.
+
+---
+
+## Book generation
+
+From the admin page (`/admin`) you can draft a **book on a topic** — e.g. "hope" — assembled
+entirely from the ministry's own sermons. It runs as a background job:
+
+1. **retrieving** — the complete roster of sermons *about* the topic is resolved (the same
+   relevance-density search the chat uses), and their chunks are pulled as grounding material.
+2. **outlining** — Claude designs a title and an ordered set of chapters, each tied to specific
+   sermon material (forced `emit_outline` tool call).
+3. **drafting** — each chapter is written grounded in the relevant sermon excerpts, with inline
+   citations — never from general knowledge.
+4. **rendering** — chapters are stored (in `books`/`book_chapters`); the PDF is generated **on
+   demand** at `GET /books/:id/download` (pdfkit, like transcripts).
+
+The job appears in the admin jobs dashboard with its live phase. The model is `BOOK_MODEL`
+(defaults to `CLAUDE_MODEL`). Endpoints: `POST /api/admin/book-gen` (`{ topic }`, admin-only),
+`GET /api/admin/books` (admin-only), `GET /books/:id/download` (public, once the book is `done`).
 
 ---
 

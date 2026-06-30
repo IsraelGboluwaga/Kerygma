@@ -616,3 +616,91 @@ export function listSpeakerAliases(): { alias: string; canonicalName: string }[]
     .all() as { alias: string; canonical_name: string }[]
   return rows.map((r) => ({ alias: r.alias, canonicalName: r.canonical_name }))
 }
+
+// ── Book drafts ──────────────────────────────────────────────────────────────
+
+export type BookStatus = 'generating' | 'done' | 'failed'
+
+export interface BookSource {
+  title: string
+  date: string
+  speaker: string | null
+}
+
+export interface BookRow {
+  id: number
+  topic: string
+  title: string | null
+  status: BookStatus
+  sources: string | null  // JSON-encoded BookSource[]
+  created_at: string
+}
+
+export interface BookChapterRow {
+  id: number
+  book_id: number
+  idx: number
+  heading: string
+  body: string
+}
+
+export interface BookChapterInput {
+  idx: number
+  heading: string
+  body: string
+}
+
+/** Create a book row in the 'generating' state and return its id. */
+export function insertBook(topic: string): number {
+  const result = getDb()
+    .prepare(`INSERT INTO books (topic, status) VALUES (?, 'generating')`)
+    .run(topic)
+  return result.lastInsertRowid as number
+}
+
+/** Record the model-chosen title and the sermons the draft was grounded in. */
+export function setBookTitleAndSources(id: number, title: string, sources: BookSource[]): void {
+  getDb()
+    .prepare(`UPDATE books SET title = ?, sources = ? WHERE id = ?`)
+    .run(title, JSON.stringify(sources), id)
+}
+
+/** Persist all chapters of a book atomically, in order. */
+export function addBookChapters(bookId: number, chapters: BookChapterInput[]): void {
+  const database = getDb()
+  const insert = database.prepare(
+    `INSERT INTO book_chapters (book_id, idx, heading, body) VALUES (@book_id, @idx, @heading, @body)`
+  )
+  const insertMany = database.transaction((rows: BookChapterInput[]) => {
+    for (const ch of rows) {
+      insert.run({ book_id: bookId, idx: ch.idx, heading: ch.heading, body: ch.body })
+    }
+  })
+  insertMany(chapters)
+}
+
+export function markBookDone(id: number): void {
+  getDb().prepare(`UPDATE books SET status = 'done' WHERE id = ?`).run(id)
+}
+
+export function markBookFailed(id: number): void {
+  getDb().prepare(`UPDATE books SET status = 'failed' WHERE id = ?`).run(id)
+}
+
+export function getBook(id: number): BookRow | null {
+  return (
+    (getDb().prepare(`SELECT * FROM books WHERE id = ?`).get(id) as BookRow | undefined) ?? null
+  )
+}
+
+export function getBookChapters(bookId: number): BookChapterRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM book_chapters WHERE book_id = ? ORDER BY idx`)
+    .all(bookId) as BookChapterRow[]
+}
+
+export function listBooks(limit = 50): BookRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM books ORDER BY created_at DESC, id DESC LIMIT ?`)
+    .all(limit) as BookRow[]
+}

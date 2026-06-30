@@ -1,5 +1,7 @@
 import type {
   AdminStatus,
+  Book,
+  BookGenResponse,
   ChatEvent,
   ChatMessage,
   DbTablePage,
@@ -122,6 +124,20 @@ export async function getStatusData(secret: string): Promise<StatusData> {
 export async function syncApi(secret: string): Promise<{ ok: boolean }> {
   return asJson(
     await fetch('/api/admin/sync-api', { method: 'POST', headers: adminHeaders(secret) })
+  )
+}
+
+export async function getBooks(secret: string): Promise<Book[]> {
+  return asJson(await fetch('/api/admin/books', { headers: adminHeaders(secret) }))
+}
+
+export async function requestBook(secret: string, topic: string): Promise<BookGenResponse> {
+  return asJson(
+    await fetch('/api/admin/book-gen', {
+      method: 'POST',
+      headers: { ...adminHeaders(secret), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic }),
+    })
   )
 }
 

@@ -5,8 +5,21 @@ import { upsertJob, getJobRow, listRecentJobRows, type JobRow } from './db/queri
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed'
 
-/** Sub-steps of a running ingestion job, surfaced for live transparency. */
-export type JobPhase = 'downloading' | 'transcribing' | 'chunking' | 'embedding'
+/**
+ * Sub-steps of a running job, surfaced for live transparency. The first group
+ * belongs to ingestion; the second to book-draft generation. `phase` is only
+ * meaningful while `status === 'running'` — the queue clears it on terminal
+ * states.
+ */
+export type JobPhase =
+  | 'downloading'
+  | 'transcribing'
+  | 'chunking'
+  | 'embedding'
+  | 'retrieving'
+  | 'outlining'
+  | 'drafting'
+  | 'rendering'
 
 export interface Job {
   id: string

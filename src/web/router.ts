@@ -21,12 +21,19 @@ import {
   findSermonsByTitle,
   getTranscriptionBySermonId,
   resolveAliasToCanonical,
+  insertBook,
+  getBook,
+  getBookChapters,
+  listBooks,
   type SermonRow,
 } from '../db/queries.js'
 import type { TranscriptSegment } from '../ingestion/transcriber.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
+import { enqueue } from '../queue.js'
+import { generateBook } from '../book/generator.js'
+import { generateBookPdf, bookPdfFilename } from './bookPdf.js'
 import { generateTranscriptPdf, transcriptPdfFilename } from './transcriptPdf.js'
 import { parseTranscriptQuery, type TranscriptQuery } from './transcriptQuery.js'
 import { formatSermonDate, humanizeDatePrefix } from './transcriptFormat.js'
@@ -526,6 +533,34 @@ export function createRouter(anthropic: Anthropic): Hono {
     }
   })
 
+  // ── Books ─────────────────────────────────────────────────────────────────
+  // On-demand PDF of a generated book draft — rendered per request from the
+  // stored chapters (Markdown lives in SQLite, which Litestream replicates; a
+  // PDF written to the ephemeral container's disk would not survive a restart).
+  app.get('/books/:id/download', async (c) => {
+    const id = parseInt(c.req.param('id'), 10)
+    if (!Number.isInteger(id)) return c.json({ error: 'Invalid book id' }, 400)
+
+    const book = getBook(id)
+    if (!book) return c.notFound()
+    if (book.status !== 'done') {
+      return c.json({ error: `Book is not ready (status: ${book.status})` }, 409)
+    }
+
+    try {
+      const pdf = await generateBookPdf(book, getBookChapters(id))
+      return new Response(new Uint8Array(pdf), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${bookPdfFilename(book)}"`,
+        },
+      })
+    } catch (err) {
+      logger.error(`Book PDF error: ${errMsg(err)}`)
+      return c.json({ error: 'Failed to generate PDF' }, 500)
+    }
+  })
+
   // ── Admin auth middleware ───────────────────────────────────────────────
   const adminMiddleware = async (
     c: Parameters<Parameters<Hono['use']>[1]>[0],
@@ -561,6 +596,47 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.json({ ok: true, message: 'API sync started in background' }, 202)
   })
 
+  // Kick off a book draft on a topic. Creates the book row up-front (so its
+  // download URL is known immediately) and runs generation as a background job,
+  // which appears in the jobs dashboard like any other.
+  app.post('/api/admin/book-gen', async (c) => {
+    let body: { topic?: unknown }
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400)
+    }
+    const topic = typeof body.topic === 'string' ? body.topic.trim() : ''
+    if (!topic) return c.json({ error: 'A non-empty "topic" is required' }, 400)
+
+    if (countSermons() === 0) {
+      return c.json({ error: 'No sermons indexed yet — ingest some first.' }, 404)
+    }
+
+    const bookId = insertBook(topic)
+    const downloadUrl = `/books/${bookId}/download`
+    const jobId = enqueue((ctx) => generateBook({ bookId, topic }, anthropic, ctx), {
+      title: `Book: ${topic}`,
+      downloadUrl,
+      payload: JSON.stringify({ bookId, topic }),
+    })
+    return c.json({ jobId, bookId, downloadUrl }, 202)
+  })
+
+  // List generated books (newest first) for the admin UI.
+  app.get('/api/admin/books', (c) => {
+    return c.json(
+      listBooks(50).map((b) => ({
+        id: b.id,
+        topic: b.topic,
+        title: b.title,
+        status: b.status,
+        createdAt: b.created_at,
+        downloadUrl: `/books/${b.id}/download`,
+      }))
+    )
+  })
+
   // Snapshot for the live status dashboard: recent jobs (queued ones carry
   // their 1-based queue position) plus current queue depth.
   app.get('/api/admin/status/data', (c) => {
@@ -571,7 +647,7 @@ export function createRouter(anthropic: Anthropic): Hono {
   })
 
   // ── DB Browser data API ─────────────────────────────────────────────────
-  const DB_TABLES = new Set(['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons'])
+  const DB_TABLES = new Set(['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons', 'books', 'book_chapters'])
 
   app.get('/api/db/:table', (c) => {
     const table = c.req.param('table')

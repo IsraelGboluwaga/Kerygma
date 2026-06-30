@@ -94,6 +94,31 @@ export function initDb(db: Database.Database): void {
       canonical_name TEXT NOT NULL
     );
 
+    -- Book drafts generated from sermon material on a topic. Chapters live in a
+    -- separate one-to-many table so a book row stays small and listable. The
+    -- sources column is a JSON array of the sermons the draft was grounded in
+    -- (rendered on the PDF sources page). The status column gates the download
+    -- endpoint until it is 'done'.
+    CREATE TABLE IF NOT EXISTS books (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic      TEXT NOT NULL,
+      title      TEXT,
+      status     TEXT NOT NULL DEFAULT 'generating',  -- generating | done | failed
+      sources    TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS book_chapters (
+      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL REFERENCES books(id),
+      idx     INTEGER NOT NULL,
+      heading TEXT NOT NULL,
+      body    TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_book_created       ON books(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_book_chapter_book  ON book_chapters(book_id);
+
     CREATE TABLE IF NOT EXISTS config (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
