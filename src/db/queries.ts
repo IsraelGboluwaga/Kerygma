@@ -633,6 +633,7 @@ export interface BookRow {
   title: string | null
   status: BookStatus
   sources: string | null  // JSON-encoded BookSource[]
+  chapter_count: number | null  // planned chapters, set once the outline is known
   created_at: string
 }
 
@@ -665,18 +666,25 @@ export function setBookTitleAndSources(id: number, title: string, sources: BookS
     .run(title, JSON.stringify(sources), id)
 }
 
-/** Persist all chapters of a book atomically, in order. */
-export function addBookChapters(bookId: number, chapters: BookChapterInput[]): void {
-  const database = getDb()
-  const insert = database.prepare(
-    `INSERT INTO book_chapters (book_id, idx, heading, body) VALUES (@book_id, @idx, @heading, @body)`
-  )
-  const insertMany = database.transaction((rows: BookChapterInput[]) => {
-    for (const ch of rows) {
-      insert.run({ book_id: bookId, idx: ch.idx, heading: ch.heading, body: ch.body })
-    }
-  })
-  insertMany(chapters)
+/** Record the planned chapter count (once the outline is known) for progress display. */
+export function setBookChapterCount(id: number, count: number): void {
+  getDb().prepare(`UPDATE books SET chapter_count = ? WHERE id = ?`).run(count, id)
+}
+
+/** Append a single chapter. Chapters are inserted as they are drafted so the
+ *  status view can show live progress (N of M chapters generated). */
+export function addBookChapter(bookId: number, chapter: BookChapterInput): void {
+  getDb()
+    .prepare(`INSERT INTO book_chapters (book_id, idx, heading, body) VALUES (?, ?, ?, ?)`)
+    .run(bookId, chapter.idx, chapter.heading, chapter.body)
+}
+
+/** Number of chapters drafted so far for a book. */
+export function getBookChapterCount(bookId: number): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS count FROM book_chapters WHERE book_id = ?`)
+    .get(bookId) as { count: number }
+  return row.count
 }
 
 export function markBookDone(id: number): void {

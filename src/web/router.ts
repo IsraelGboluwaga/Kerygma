@@ -24,6 +24,7 @@ import {
   insertBook,
   getBook,
   getBookChapters,
+  getBookChapterCount,
   listBooks,
   type SermonRow,
 } from '../db/queries.js'
@@ -623,7 +624,8 @@ export function createRouter(anthropic: Anthropic): Hono {
     return c.json({ jobId, bookId, downloadUrl }, 202)
   })
 
-  // List generated books (newest first) for the admin UI.
+  // List generated books (newest first) for the admin UI. `chaptersGenerated`
+  // vs `chapterCount` drives the live progress column on the book page.
   app.get('/api/admin/books', (c) => {
     return c.json(
       listBooks(50).map((b) => ({
@@ -631,6 +633,8 @@ export function createRouter(anthropic: Anthropic): Hono {
         topic: b.topic,
         title: b.title,
         status: b.status,
+        chapterCount: b.chapter_count,
+        chaptersGenerated: getBookChapterCount(b.id),
         createdAt: b.created_at,
         downloadUrl: `/books/${b.id}/download`,
       }))

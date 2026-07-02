@@ -300,7 +300,7 @@ chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp
 chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 jobs           (id, title, download_url, payload, status, phase, message, error, created_at, started_at, completed_at)
 missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, theme, kind, reason, created_at, updated_at)
-books          (id, topic, title, status, sources, created_at)
+books          (id, topic, title, status, sources, chapter_count, created_at)
 book_chapters  (id, book_id, idx, heading, body)
 ```
 
@@ -316,21 +316,25 @@ book_chapters  (id, book_id, idx, heading, body)
 
 ## Book generation
 
-From the admin page (`/admin`) you can draft a **book on a topic** — e.g. "hope" — assembled
-entirely from the ministry's own sermons. It runs as a background job:
+From the admin page, click **Generate a Book** (the `/admin/books` page) and enter a topic —
+e.g. "hope". The app assembles a book **entirely from the ministry's own sermons**, as a
+background job:
 
 1. **retrieving** — the complete roster of sermons *about* the topic is resolved (the same
    relevance-density search the chat uses), and their chunks are pulled as grounding material.
 2. **outlining** — Claude designs a title and an ordered set of chapters, each tied to specific
-   sermon material (forced `emit_outline` tool call).
+   sermon material (forced `emit_outline` tool call). The **number of chapters is right-sized to
+   the available sermon material** (a thin topic yields fewer; capped at 12).
 3. **drafting** — each chapter is written grounded in the relevant sermon excerpts, with inline
-   citations — never from general knowledge.
-4. **rendering** — chapters are stored (in `books`/`book_chapters`); the PDF is generated **on
-   demand** at `GET /books/:id/download` (pdfkit, like transcripts).
+   citations — never from general knowledge. Chapters are saved as they're written, so the book
+   page shows live **N / M chapters** progress.
+4. **rendering** — the PDF is generated **on demand** at `GET /books/:id/download` (pdfkit, like
+   transcripts; Markdown lives in `books`/`book_chapters`).
 
-The job appears in the admin jobs dashboard with its live phase. The model is `BOOK_MODEL`
+The job also appears in the admin jobs dashboard with its live phase. The model is `BOOK_MODEL`
 (defaults to `CLAUDE_MODEL`). Endpoints: `POST /api/admin/book-gen` (`{ topic }`, admin-only),
-`GET /api/admin/books` (admin-only), `GET /books/:id/download` (public, once the book is `done`).
+`GET /api/admin/books` (admin-only, includes progress), `GET /books/:id/download` (public, once
+the book is `done`).
 
 ---
 

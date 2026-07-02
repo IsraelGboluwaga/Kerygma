@@ -84,6 +84,7 @@ describe('generateBook', () => {
     const book = getBook(bookId)
     expect(book?.status).toBe('done')
     expect(book?.title).toBe('A Book on Hope')
+    expect(book?.chapter_count).toBe(2)
 
     const chapters = getBookChapters(bookId)
     expect(chapters).toHaveLength(2)

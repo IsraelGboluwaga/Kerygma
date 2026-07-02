@@ -95,6 +95,8 @@ export interface Book {
   topic: string
   title: string | null
   status: BookStatus
+  chapterCount: number | null      // planned chapters (known after outlining)
+  chaptersGenerated: number        // chapters drafted so far
   createdAt: string
   downloadUrl: string
 }

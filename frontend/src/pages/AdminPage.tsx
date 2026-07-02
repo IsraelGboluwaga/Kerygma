@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { getAdminJobs, getAdminStatus, getBooks, requestBook, syncApi } from '../api/client'
-import type { AdminStatus, Book, Job } from '../api/types'
+import { getAdminJobs, getAdminStatus, syncApi } from '../api/client'
+import type { AdminStatus, Job } from '../api/types'
 import { useAdminSecret } from '../lib/useAdminSecret'
 import { fmtDateTime, fmtRelative } from '../lib/format'
 import TopBar from '../components/TopBar'
@@ -16,24 +16,15 @@ export default function AdminPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [syncMsg, setSyncMsg] = useState('')
   const [syncing, setSyncing] = useState(false)
-  const [books, setBooks] = useState<Book[]>([])
-  const [bookTopic, setBookTopic] = useState('')
-  const [bookMsg, setBookMsg] = useState('')
-  const [generating, setGenerating] = useState(false)
 
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(async () => {
     if (!secret) return
     try {
-      const [st, jb, bk] = await Promise.all([
-        getAdminStatus(secret),
-        getAdminJobs(secret),
-        getBooks(secret),
-      ])
+      const [st, jb] = await Promise.all([getAdminStatus(secret), getAdminJobs(secret)])
       setStatus(st)
       setJobs(jb)
-      setBooks(bk)
       setLoaded(true)
       setAuthError(false)
     } catch {
@@ -64,31 +55,19 @@ export default function AdminPage() {
     }
   }
 
-  async function onGenerateBook() {
-    const topic = bookTopic.trim()
-    if (!topic) return
-    setGenerating(true)
-    setBookMsg('Starting book draft…')
-    try {
-      await requestBook(secret, topic)
-      setBookMsg(`Generating a book on “${topic}” — it will appear below when done.`)
-      setBookTopic('')
-      setTimeout(() => void refresh(), 3000)
-    } catch (err) {
-      setBookMsg(err instanceof Error ? err.message : 'Book generation failed to start')
-    } finally {
-      setGenerating(false)
-    }
-  }
-
   return (
     <div className="flex min-h-full flex-col">
       <TopBar
         subtitle="Ingestion Status"
         right={
-          <Link to="/admin/live" className="text-[0.8rem] text-ink-faint hover:text-accent">
-            Live status →
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link to="/admin/books" className="text-[0.8rem] text-ink-faint hover:text-accent">
+              Generate a book →
+            </Link>
+            <Link to="/admin/live" className="text-[0.8rem] text-ink-faint hover:text-accent">
+              Live status →
+            </Link>
+          </div>
         }
       />
 
@@ -179,82 +158,18 @@ export default function AdminPage() {
           </div>
         </div>
 
-        <div className="card">
-          <h2 className="mb-4 text-[0.85rem] font-semibold uppercase tracking-[0.05em] text-ink-faint">
-            Generate a Book
-          </h2>
-          <p className="mb-4 text-[0.82rem] text-ink-faint">
-            Draft a book on a topic from the ministry’s own sermons — outlined and written chapter by
-            chapter, then downloadable as a PDF. Generation runs in the background and appears below.
-          </p>
-          <div className="mb-3 flex flex-wrap items-end gap-3">
-            <div className="min-w-[220px] flex-1">
-              <label className="mb-1.5 block text-[0.82rem] font-medium text-ink-dim">Topic</label>
-              <input
-                type="text"
-                className="field w-full"
-                placeholder="e.g. hope"
-                value={bookTopic}
-                onChange={(e) => setBookTopic(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && void onGenerateBook()}
-                disabled={!loaded}
-              />
-            </div>
-            <button
-              className="btn-primary"
-              disabled={!loaded || generating || !bookTopic.trim()}
-              onClick={() => void onGenerateBook()}
-            >
-              Generate
-            </button>
+        <div className="card flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-[0.85rem] font-semibold uppercase tracking-[0.05em] text-ink-faint">
+              Books
+            </h2>
+            <p className="mt-1 text-[0.82rem] text-ink-faint">
+              Draft a book on a topic from the ministry’s own sermons and track its progress.
+            </p>
           </div>
-          {bookMsg && <p className="mb-4 text-[0.85rem] text-ink-faint">{bookMsg}</p>}
-
-          <div className="max-h-[320px] overflow-y-auto">
-            {!loaded ? (
-              <em className="text-ink-ghost">Enter your admin secret above to view books.</em>
-            ) : books.length === 0 ? (
-              <em className="text-ink-ghost">No books generated yet.</em>
-            ) : (
-              <table className="w-full border-collapse text-[0.83rem]">
-                <thead>
-                  <tr>
-                    {['Time', 'Title', 'Topic', 'Status', ''].map((h, i) => (
-                      <th
-                        key={i}
-                        className="sticky top-0 border-b border-line bg-surface px-3 py-2 text-left text-[0.75rem] uppercase tracking-[0.05em] text-ink-ghost"
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {books.map((b) => (
-                    <tr key={b.id}>
-                      <td className="whitespace-nowrap border-b border-[#141414] px-3 py-2 text-[#ccc]">
-                        {fmtDateTime(b.createdAt)}
-                      </td>
-                      <td className="border-b border-[#141414] px-3 py-2 text-[#ccc]">{b.title || '—'}</td>
-                      <td className="border-b border-[#141414] px-3 py-2 text-ink-faint">{b.topic}</td>
-                      <td className="border-b border-[#141414] px-3 py-2">
-                        <Badge status={b.status} />
-                      </td>
-                      <td className="border-b border-[#141414] px-3 py-2">
-                        {b.status === 'done' ? (
-                          <a className="text-accent hover:underline" href={b.downloadUrl}>
-                            Download PDF
-                          </a>
-                        ) : (
-                          <span className="text-ink-ghost">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          <Link to="/admin/books" className="btn-primary">
+            Generate a Book →
+          </Link>
         </div>
       </div>
     </div>

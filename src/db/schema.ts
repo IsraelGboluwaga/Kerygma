@@ -100,12 +100,13 @@ export function initDb(db: Database.Database): void {
     -- (rendered on the PDF sources page). The status column gates the download
     -- endpoint until it is 'done'.
     CREATE TABLE IF NOT EXISTS books (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      topic      TEXT NOT NULL,
-      title      TEXT,
-      status     TEXT NOT NULL DEFAULT 'generating',  -- generating | done | failed
-      sources    TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic         TEXT NOT NULL,
+      title         TEXT,
+      status        TEXT NOT NULL DEFAULT 'generating',  -- generating | done | failed
+      sources       TEXT,
+      chapter_count INTEGER,                             -- planned chapters, set after outlining
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS book_chapters (
@@ -207,6 +208,15 @@ export function initDb(db: Database.Database): void {
   }
   if (!jobColNames.has('phase')) {
     db.exec(`ALTER TABLE jobs ADD COLUMN phase TEXT`)
+  }
+
+  const existingBookCols = db
+    .prepare(`PRAGMA table_info(books)`)
+    .all() as Array<{ name: string }>
+  const bookColNames = new Set(existingBookCols.map((c) => c.name))
+
+  if (!bookColNames.has('chapter_count')) {
+    db.exec(`ALTER TABLE books ADD COLUMN chapter_count INTEGER`)
   }
 
   // Seed known speaker aliases (INSERT OR IGNORE — safe to re-run on every startup).

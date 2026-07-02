@@ -11,13 +11,13 @@ import {
   findSermonsByTitle,
   getChunksBySermonId,
   setBookTitleAndSources,
-  addBookChapters,
+  setBookChapterCount,
+  addBookChapter,
   markBookDone,
   markBookFailed,
   type SermonRow,
   type ChunkRow,
   type BookSource,
-  type BookChapterInput,
 } from '../db/queries.js'
 
 export interface BookRequest {
@@ -124,7 +124,11 @@ async function generateOutline(
       messages: [
         {
           role: 'user',
-          content: `You are compiling a book on "${topic}" for ${config.MINISTRY_NAME}, drawn ENTIRELY from the sermon material below — never from general knowledge. Design a coherent book: a compelling title and an ordered set of chapters (at most ${MAX_BOOK_CHAPTERS}). For each chapter give a heading, a one-or-two-sentence focus, and the ids of the sermons whose material grounds it (choose only from the ids listed). Then call emit_outline.
+          content: `You are compiling a book on "${topic}" for ${config.MINISTRY_NAME}, drawn ENTIRELY from the sermon material below — never from general knowledge. Design a coherent book: a compelling title and an ordered set of chapters.
+
+Right-size the number of chapters to the DEPTH of the available material — do NOT pad. A thin topic with little material may only warrant 2–4 chapters; a rich one can have more, up to a hard maximum of ${MAX_BOOK_CHAPTERS}. Every chapter must be substantively supported by the sermons listed — never invent chapters to hit a number.
+
+For each chapter give a heading, a one-or-two-sentence focus, and the ids of the sermons whose material grounds it (choose only from the ids listed). Then call emit_outline.
 
 Sermon material:
 ${digest}`,
@@ -254,23 +258,25 @@ export async function generateBook(
     ctx.setPhase('outlining')
     const outline = await generateOutline(req.topic, corpus, anthropic, model)
     setBookTitleAndSources(req.bookId, outline.title, bookSources)
+    // Publish the planned chapter count so the status view can show progress.
+    setBookChapterCount(req.bookId, outline.chapters.length)
 
     ctx.setPhase('drafting')
-    const chapters: BookChapterInput[] = []
+    // Persist each chapter as it is drafted (not in one batch at the end) so the
+    // status table shows N of M chapters generated while the job runs.
     for (let i = 0; i < outline.chapters.length; i++) {
       const ch = outline.chapters[i]
       logger.debug(`Book ${req.bookId}: drafting chapter ${i + 1}/${outline.chapters.length} — ${ch.heading}`)
       const body = await draftChapter(req.topic, outline.title, ch, corpusById, anthropic, model)
-      chapters.push({ idx: i, heading: ch.heading, body })
+      addBookChapter(req.bookId, { idx: i, heading: ch.heading, body })
     }
 
     ctx.setPhase('rendering')
-    addBookChapters(req.bookId, chapters)
     markBookDone(req.bookId)
 
     return {
       status: 'ok',
-      message: `Generated “${outline.title}” — ${chapters.length} chapter(s) from ${sermons.length} sermon(s)`,
+      message: `Generated “${outline.title}” — ${outline.chapters.length} chapter(s) from ${sermons.length} sermon(s)`,
     }
   } catch (err) {
     markBookFailed(req.bookId)
