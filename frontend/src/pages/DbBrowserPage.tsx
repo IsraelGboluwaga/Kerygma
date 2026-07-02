@@ -4,7 +4,7 @@ import type { DbTablePage } from '../api/types'
 import { useAdminSecret } from '../lib/useAdminSecret'
 import TopBar from '../components/TopBar'
 
-const TABLES = ['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons']
+const TABLES = ['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons', 'books', 'book_chapters']
 const LIMIT = 50
 
 function truncate(s: string, max: number): string {
