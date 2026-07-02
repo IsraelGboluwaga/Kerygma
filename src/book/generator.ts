@@ -180,23 +180,44 @@ function gatherChapterMaterial(chapter: OutlineChapter, corpusById: Map<number, 
   return material.trim()
 }
 
+// Compact, numbered view of the whole book plan (heading + focus per chapter).
+// Stable across a book's chapters, so it can live behind the cache breakpoint.
+function outlinePlan(outline: Outline): string {
+  return outline.chapters.map((c, i) => `${i + 1}. ${c.heading} — ${c.focus}`).join('\n')
+}
+
 async function draftChapter(
   topic: string,
   bookTitle: string,
-  chapter: OutlineChapter,
+  outline: Outline,
+  index: number,
   corpusById: Map<number, CorpusEntry>,
   anthropic: Anthropic,
   model: string
 ): Promise<string> {
+  const chapter = outline.chapters[index]
   const material = gatherChapterMaterial(chapter, corpusById)
 
-  // Stable across every chapter of this book, so it sits behind the
-  // cache_control breakpoint; the per-chapter excerpts go in the user turn.
+  // Stable across every chapter of this book (title, topic, rules, and the full
+  // plan), so it sits behind the cache_control breakpoint. Handing the model the
+  // whole plan — plus, in the user turn, which chapters precede this one — is a
+  // cheap running summary: it lets each chapter build on the others and avoid
+  // repeating them, without feeding full prior-chapter prose (quadratic cost).
   const system = [
     `You are writing a book titled "${bookTitle}" on the subject of "${topic}" for ${config.MINISTRY_NAME}.`,
     'Write each chapter ENTIRELY from the sermon excerpts provided — never add teaching, doctrine, scripture interpretation, or claims not grounded in those excerpts. This is a faithful synthesis of the ministry\'s own preaching, not general knowledge.',
     'Write flowing prose across several paragraphs. Do NOT restate the chapter title or use markdown headings — the heading is added separately. Attribute ideas inline to the sermons you draw from, e.g. "(Sermon Title, Date)". Separate paragraphs with a blank line.',
+    'This chapter is part of a larger book. Build on the earlier chapters rather than repeating them: cover only what THIS chapter should add, and do not re-explain points already made in the chapters listed as already written.',
+    `The full chapter plan for this book is:\n${outlinePlan(outline)}`,
   ].join('\n')
+
+  const priorNote =
+    index === 0
+      ? 'This is the FIRST chapter — no earlier chapters have been written yet.'
+      : `Chapters already written (build on these; do not repeat their material):\n${outline.chapters
+          .slice(0, index)
+          .map((c, i) => `${i + 1}. ${c.heading} — ${c.focus}`)
+          .join('\n')}`
 
   const response = await withRetry(() =>
     anthropic.messages.create({
@@ -206,8 +227,10 @@ async function draftChapter(
       messages: [
         {
           role: 'user',
-          content: `Chapter: ${chapter.heading}
+          content: `Write chapter ${index + 1} of ${outline.chapters.length}: "${chapter.heading}".
 Focus: ${chapter.focus}
+
+${priorNote}
 
 Write this chapter using only the following sermon excerpts:
 
@@ -267,7 +290,7 @@ export async function generateBook(
     for (let i = 0; i < outline.chapters.length; i++) {
       const ch = outline.chapters[i]
       logger.debug(`Book ${req.bookId}: drafting chapter ${i + 1}/${outline.chapters.length} — ${ch.heading}`)
-      const body = await draftChapter(req.topic, outline.title, ch, corpusById, anthropic, model)
+      const body = await draftChapter(req.topic, outline.title, outline, i, corpusById, anthropic, model)
       addBookChapter(req.bookId, { idx: i, heading: ch.heading, body })
     }
 

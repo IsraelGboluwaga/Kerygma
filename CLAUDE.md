@@ -141,7 +141,7 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - Persist Markdown (chapters) in SQLite, not a PDF on disk: SQLite is what Litestream replicates; the container is ephemeral. The PDF is rendered **on demand** by `src/web/bookPdf.ts` (pdfkit — no headless browser, same rule as transcripts) at `GET /books/:id/download`, gated on `book.status === 'done'`.
 - The drafting model is `config.BOOK_MODEL ?? config.CLAUDE_MODEL` — resolved at the use site, not baked into the Zod schema.
 - Persist the planned `chapter_count` after outlining (`setBookChapterCount`) and insert each chapter as it's drafted (`addBookChapter`), **not** batched at the end — the `/admin/books` page shows live `N / M` progress from `chaptersGenerated`/`chapterCount`. Right-size chapter count to the available material (cap 12, no floor); don't pad.
-- Chapters are drafted **independently** today (no progressive cross-chapter context). If you add progressive context, keep it a compact running summary — do not feed full prior-chapter prose into every call (quadratic token cost).
+- Chapters draft with **progressive context**: each call gets the full chapter plan (stable → behind the `cache_control` breakpoint) plus a recap of the already-written chapters (headings + foci) so they build on, not repeat, one another. Keep this a **compact running summary** — do **not** feed full prior-chapter prose into every call (quadratic token cost).
 
 ### Transcripts page
 - Transcript text comes from the `transcriptions` table (`getTranscriptionBySermonId`) — the verbatim copy. Do not rebuild it from chunks.

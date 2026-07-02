@@ -326,8 +326,9 @@ background job:
    sermon material (forced `emit_outline` tool call). The **number of chapters is right-sized to
    the available sermon material** (a thin topic yields fewer; capped at 12).
 3. **drafting** — each chapter is written grounded in the relevant sermon excerpts, with inline
-   citations — never from general knowledge. Chapters are saved as they're written, so the book
-   page shows live **N / M chapters** progress.
+   citations — never from general knowledge. Each chapter also gets the full plan and a recap of
+   the earlier chapters, so it **builds on them rather than repeating**. Chapters are saved as
+   they're written, so the book page shows live **N / M chapters** progress.
 4. **rendering** — the PDF is generated **on demand** at `GET /books/:id/download` (pdfkit, like
    transcripts; Markdown lives in `books`/`book_chapters`).
 
