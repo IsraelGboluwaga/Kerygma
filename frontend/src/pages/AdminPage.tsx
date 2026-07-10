@@ -60,9 +60,14 @@ export default function AdminPage() {
       <TopBar
         subtitle="Ingestion Status"
         right={
-          <Link to="/admin/live" className="text-[0.8rem] text-ink-faint hover:text-accent">
-            Live status →
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link to="/admin/books" className="text-[0.8rem] text-ink-faint hover:text-accent">
+              Generate a book →
+            </Link>
+            <Link to="/admin/live" className="text-[0.8rem] text-ink-faint hover:text-accent">
+              Live status →
+            </Link>
+          </div>
         }
       />
 
@@ -151,6 +156,20 @@ export default function AdminPage() {
               </table>
             )}
           </div>
+        </div>
+
+        <div className="card flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-[0.85rem] font-semibold uppercase tracking-[0.05em] text-ink-faint">
+              Books
+            </h2>
+            <p className="mt-1 text-[0.82rem] text-ink-faint">
+              Draft a book on a topic from the ministry’s own sermons and track its progress.
+            </p>
+          </div>
+          <Link to="/admin/books" className="btn-primary">
+            Generate a Book →
+          </Link>
         </div>
       </div>
     </div>

@@ -192,7 +192,7 @@ the `jobs` DB table so history survives server restarts.
 - `getQueuePosition(id)` — 1-based position of a job still waiting in line, else null
 - `waitUntilIdle()` — used during graceful shutdown
 
-Job phases (`downloading` → `transcribing` → `chunking` → `embedding`) are reported by the ingestion pipeline through the `setPhase` callback, giving the status dashboard live sub-step visibility without adding log volume.
+Job phases are reported through the `setPhase` callback, giving the status dashboard live sub-step visibility without adding log volume. Ingestion uses `downloading → transcribing → chunking → embedding`; book generation uses `retrieving → outlining → drafting → rendering`.
 
 ### `src/mcp/server.ts`
 `createMcpServer(anthropic)` — accepts an injected Anthropic client.
@@ -206,12 +206,13 @@ Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMes
 
 ### `frontend/` — React + Vite SPA
 The entire member- and admin-facing UI is a single-page React app (TypeScript + Tailwind, mobile-responsive) built by Vite. The backend no longer renders HTML — it exposes JSON/SSE APIs under `/api/*` (plus the PDF download) and serves the built SPA. Key files:
-- `frontend/src/App.tsx` — `react-router-dom` routes: `/` (chat), `/transcripts`, `/transcripts/:videoId`, `/admin`, `/admin/live`, `/lyrical-theology`, and a 404
+- `frontend/src/App.tsx` — `react-router-dom` routes: `/` (chat), `/transcripts`, `/transcripts/:videoId`, `/admin`, `/admin/books`, `/admin/live`, `/lyrical-theology`, and a 404
 - `frontend/src/api/client.ts` — typed fetch wrappers + the chat SSE reader (`streamChat`, an async generator yielding `delta`/`context`/`done`/`error` frames); `frontend/src/api/types.ts` mirrors the backend response shapes
 - `frontend/src/pages/ChatPage.tsx` — message thread, streaming assistant bubbles (markdown via `marked`), collapsible "Sources", auto-growing input
 - `frontend/src/pages/TranscriptsPage.tsx` — NL search box + structured filters (month/year/theme/speaker), responsive results table
 - `frontend/src/pages/TranscriptViewPage.tsx` — single transcript, timestamped segments or paragraph fallback, Download PDF link
-- `frontend/src/pages/AdminPage.tsx` — secret-gated stats + recent jobs, "Sync Now", 30 s auto-refresh
+- `frontend/src/pages/AdminPage.tsx` — secret-gated stats + recent jobs, "Sync Now", 30 s auto-refresh, and a link to the Generate-Book page
+- `frontend/src/pages/BookGenPage.tsx` — the Generate-Book page (`/admin/books`): topic form (`POST /api/admin/book-gen`) + a books table with a live progress column (`chaptersGenerated / chapterCount`) and Download-PDF links, polling every 5 s
 - `frontend/src/pages/LiveStatusPage.tsx` — phase stepper (Download → Transcribe → Chunk → Embed), queue + recent tables, polls every 2 s
 - `frontend/src/pages/DbBrowserPage.tsx` — secret-gated paginated table explorer (BLOBs shown as `[blob: NB]`)
 - The admin secret lives in `sessionStorage` (`frontend/src/lib/useAdminSecret.ts`) and is sent as `X-Admin-Secret`
@@ -222,6 +223,12 @@ The app is an installable **PWA**: `vite-plugin-pwa` generates `sw.js` + `manife
 
 ### `src/web/transcriptPdf.ts`
 `generateTranscriptPdf(sermon, transcript)` renders a transcript to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser; sub-second even for a 2-hour sermon). `transcriptPdfFilename(sermon)` builds the `theme__title__month-year.pdf` download name (theme falls back to `sermon`).
+
+### `src/book/generator.ts`
+`generateBook({ bookId, topic }, anthropic, ctx)` drafts a book from already-ingested sermon material as a background job. Phases: **retrieving** (the complete topic corpus via `searchSermonsByTopic` → `getSermonsByThemeName` → `findSermonsByTitle`, plus each sermon's chunks), **outlining** (a forced `emit_outline` tool call → title + ordered chapters, each pinned to sermon ids; the count is right-sized to the available material, capped at 12), **drafting** (one Claude call per chapter, grounded only in the relevant chunk text, with inline citations), **rendering** (mark the book `done`). After outlining it records `chapter_count` (`setBookChapterCount`) and then persists each chapter as it is drafted (`addBookChapter`) — not batched at the end — so the book page shows live `N / M` progress. The model is `BOOK_MODEL ?? CLAUDE_MODEL`; all calls go through `withRetry`. Returns a structured `{ status, message }` the queue maps to the job's terminal state, and marks the book row `failed` on any error (including an empty corpus). Each chapter draft is given **progressive context**: the full chapter plan plus a recap of the already-written chapters (their headings + foci — a compact running summary, not full prior prose) so chapters build on rather than repeat one another, at negligible token cost. The stable plan lives behind the `cache_control` breakpoint.
+
+### `src/web/bookPdf.ts`
+`generateBookPdf(book, chapters)` renders a generated book to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser, like the transcript renderer): a title page, table of contents, each chapter, and a sources page listing the sermons the draft was grounded in. `bookPdfFilename(book)` builds the `book__title__month-year.pdf` download name. Served on demand at `GET /books/:id/download`, gated on `book.status === 'done'`.
 
 ### `src/web/transcriptQuery.ts`
 `parseTranscriptQuery(text, anthropic)` uses the cheap `CHUNKING_MODEL` (wrapped in `withRetry`) to extract structured `{ date?, topic?, speaker? }` filters from a free-text request. `topic` is the subject the sermon should be *about* (e.g. "faith"), resolved by relevance — not a formal theme name. Returns `{}` on any parse failure so the route can fall back to a raw keyword search.
@@ -240,15 +247,18 @@ Hono app wiring all routes. The UI pages are client-side routes served by the SP
 - `GET /api/transcripts/search` — accepts `q` (natural-language, parsed via `parseTranscriptQuery`) **or** structured `month`/`year`/`theme`/`topic`/`speaker` params; returns `{ interpreted, sermons[] }`. Filters combine (base set by priority topic > theme > date > speaker, then the rest applied as predicates). `topic` is a **relevance** search over each sermon's Claude-derived section topics/summaries (`searchSermonsByTopic`), ranked by density. Registered before `/api/transcripts/:videoId` so "search" isn't read as a video id
 - `GET /api/transcripts/:videoId` — returns `{ sermon, segments, transcript, hasTranscript }` (rendered client-side from `transcriptions.segments`, or paragraphs from the verbatim text)
 - `GET /transcripts/:videoId/download` — streams an on-demand PDF (`application/pdf`, `Content-Disposition: attachment`); the SPA links to it directly
+- `GET /books/:id/download` — streams a generated book's PDF on demand (404 if unknown, 409 until `status === 'done'`)
 
 **Admin** — protected by `X-Admin-Secret` middleware on `/api/admin/*`
 - `GET /api/admin/status` — returns `{ queueDepth, lastSyncAt, sermonCount }`
 - `POST /api/admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202)
 - `GET /api/admin/jobs` — returns recent job list (up to 50)
 - `GET /api/admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position`
+- `POST /api/admin/book-gen` — accepts `{ topic }`, creates the book row, enqueues a generation job, returns `{ jobId, bookId, downloadUrl }` (202)
+- `GET /api/admin/books` — returns recent generated books (id, topic, title, status, `chapterCount`, `chaptersGenerated`, createdAt, downloadUrl)
 
 **DB Browser** — protected by `X-Admin-Secret` middleware on `/api/db/*`
-- `GET /api/db/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, `jobs`, or `missing_sermons`; accepts `limit` and `offset` query params
+- `GET /api/db/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, `jobs`, `missing_sermons`, `books`, or `book_chapters`; accepts `limit` and `offset` query params
 
 **Static + SPA**
 - `GET /favicon.ico`, `GET /assets/:file` — logos/icons from `public/assets`
@@ -446,6 +456,26 @@ CREATE TABLE missing_sermons (
     reason       TEXT NOT NULL,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Generated book drafts (one row per book); chapters in a separate table
+CREATE TABLE books (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic         TEXT NOT NULL,
+    title         TEXT,                              -- model-chosen, set during outlining
+    status        TEXT NOT NULL DEFAULT 'generating', -- generating | done | failed
+    sources       TEXT,                              -- JSON BookSource[] for the PDF sources page
+    chapter_count INTEGER,                           -- planned chapters, set after outlining (for progress)
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Chapters of a book, in order
+CREATE TABLE book_chapters (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL REFERENCES books(id),
+    idx     INTEGER NOT NULL,
+    heading TEXT NOT NULL,
+    body    TEXT NOT NULL
 );
 ```
 
