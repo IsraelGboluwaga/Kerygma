@@ -16,21 +16,27 @@ import {
   getSermonByVideoId,
   getSermonsByDate,
   getSermonsByThemeName,
+  getSermonsBySpeaker,
   searchSermons,
   searchSermonsByTopic,
   findSermonsByTitle,
   getTranscriptionBySermonId,
+  getSermonIdsWithTranscription,
   resolveAliasToCanonical,
+  DB_BROWSER_TABLES,
+  getTableColumns,
+  getTableRowCount,
+  getTableRows,
   type SermonRow,
 } from '../db/queries.js'
 import type { TranscriptSegment } from '../ingestion/transcriber.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
+import { formatSermonExcerpts } from '../citations.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
 import { generateTranscriptPdf, transcriptPdfFilename } from './transcriptPdf.js'
 import { parseTranscriptQuery, type TranscriptQuery } from './transcriptQuery.js'
 import { formatSermonDate, humanizeDatePrefix } from './transcriptFormat.js'
-import { getDb } from '../db/connection.js'
 
 const PUBLIC_DIR = join(fileURLToPath(import.meta.url), '..', '..', '..', 'public')
 const ASSETS_DIR = join(PUBLIC_DIR, 'assets')
@@ -77,6 +83,16 @@ function checkRateLimit(ip: string): boolean {
 
 const MAX_TRANSCRIPT_RESULTS = 100
 
+// Resolve a speaker filter (which may be an alias) to its canonical name, then
+// substring-match it against a row's speaker. Shared by every lookup that
+// accepts a speaker argument so alias resolution can't silently diverge
+// between them.
+function matchesSpeaker(rowSpeaker: string | null | undefined, filter: string): boolean {
+  const canonical = resolveAliasToCanonical(filter)
+  const sp = (canonical ?? filter).toLowerCase()
+  return (rowSpeaker ?? '').toLowerCase().includes(sp)
+}
+
 // Resolve the filters to a sermon list. A base set is chosen by priority —
 // topic (relevance) > theme (formal) > date > speaker — then the remaining
 // filters are applied as predicates. `topic` is a relevance search over the
@@ -100,7 +116,7 @@ function resolveTranscriptSermons(f: TranscriptQuery): SermonRow[] {
   } else if (f.date) {
     rows = getSermonsByDate(f.date)
   } else if (f.speaker) {
-    rows = listSermons(500)
+    rows = getSermonsBySpeaker(resolveAliasToCanonical(f.speaker) ?? f.speaker)
   } else {
     return []
   }
@@ -110,16 +126,14 @@ function resolveTranscriptSermons(f: TranscriptQuery): SermonRow[] {
     const theme = f.theme.toLowerCase()
     rows = rows.filter((r) => (r.theme ?? '').toLowerCase().includes(theme))
   }
-  if (f.speaker) {
-    const canonical = resolveAliasToCanonical(f.speaker)
-    const sp = (canonical ?? f.speaker).toLowerCase()
-    rows = rows.filter((r) => (r.speaker ?? '').toLowerCase().includes(sp))
-  }
+  if (f.speaker) rows = rows.filter((r) => matchesSpeaker(r.speaker, f.speaker as string))
   return rows.slice(0, MAX_TRANSCRIPT_RESULTS)
 }
 
-// Shape a sermon row for the transcripts table JSON response.
-function toTranscriptRow(s: SermonRow): Record<string, unknown> {
+// Shape a sermon row for the transcripts table JSON response. `hasTranscript`
+// is passed in (looked up in one batched query per request) rather than
+// queried per row here.
+function toTranscriptRow(s: SermonRow, hasTranscript: boolean): Record<string, unknown> {
   return {
     videoId: s.video_id,
     title: s.title,
@@ -128,7 +142,7 @@ function toTranscriptRow(s: SermonRow): Record<string, unknown> {
     theme: s.theme,
     excerpt: s.excerpt,
     speaker: s.speaker,
-    hasTranscript: getTranscriptionBySermonId(s.id) !== null,
+    hasTranscript,
     viewUrl: `/transcripts/${s.video_id}`,
     downloadUrl: `/transcripts/${s.video_id}/download`,
   }
@@ -153,8 +167,6 @@ function describeInterpretation(f: TranscriptQuery, count: number): string {
 // sermons that a top-N keyword search happened not to surface.
 type ChatSource = { title: string; date: string; timestamp?: string }
 type ChatToolResult = { text: string; sources: ChatSource[] }
-
-const CHAT_CHUNK_CONTENT_CAP = 800
 
 const CHAT_TOOLS: Anthropic.Tool[] = [
   {
@@ -206,12 +218,10 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
 ]
 
 function searchExcerptsTool(query: string, speaker?: string): ChatToolResult {
-  let chunks = searchChunks(query, 10)
-  if (speaker) {
-    const canonical = resolveAliasToCanonical(speaker)
-    const sp = (canonical ?? speaker).toLowerCase()
-    chunks = chunks.filter((c) => (c.speaker ?? '').toLowerCase().includes(sp))
-  }
+  // Filter by speaker in the query itself (not after the top-10 limit) so a
+  // speaker filter narrows the ranked set instead of shrinking it.
+  const resolvedSpeaker = speaker ? resolveAliasToCanonical(speaker) ?? speaker : undefined
+  const chunks = searchChunks(query, 10, resolvedSpeaker)
   if (chunks.length === 0) {
     return { text: `No sermon excerpts found for "${query}".`, sources: [] }
   }
@@ -220,19 +230,10 @@ function searchExcerptsTool(query: string, speaker?: string): ChatToolResult {
     date: c.date,
     timestamp: formatTimestamp(c.timestamp_start),
   }))
-  const text = chunks
-    .map((c) => {
-      const url = c.webpage_url ?? c.download_url ?? null
-      const header = [
-        c.sermon_title,
-        c.speaker ?? 'Unknown',
-        c.date,
-        formatTimestamp(c.timestamp_start),
-        ...(url ? [`URL: ${url}`] : []),
-      ].join(' | ')
-      return `[${header}]\n${c.content.slice(0, CHAT_CHUNK_CONTENT_CAP)}`
-    })
-    .join('\n\n')
+  const text = formatSermonExcerpts(
+    chunks.map((c) => ({ ...c, url: c.webpage_url ?? c.download_url ?? null })),
+    { includeSpeaker: true }
+  )
   return { text, sources }
 }
 
@@ -260,10 +261,7 @@ function listSermonsTool(date?: string, topic?: string, speaker?: string): ChatT
 function findSermonTool(title: string, speaker?: string, date?: string): ChatToolResult {
   if (!title) return { text: 'No sermon title was given to look up.', sources: [] }
   let rows = findSermonsByTitle(title, 10)
-  if (speaker) {
-    const sp = speaker.toLowerCase()
-    rows = rows.filter((r) => (r.speaker ?? '').toLowerCase().includes(sp))
-  }
+  if (speaker) rows = rows.filter((r) => matchesSpeaker(r.speaker, speaker))
   if (date) rows = rows.filter((r) => r.date.startsWith(date))
   if (rows.length === 0) {
     return { text: `No sermon found with a title matching "${title}".`, sources: [] }
@@ -466,9 +464,10 @@ export function createRouter(anthropic: Anthropic): Hono {
       sermons = resolveTranscriptSermons(filters)
     }
 
+    const transcribedIds = getSermonIdsWithTranscription(sermons.map((s) => s.id))
     return c.json({
       interpreted: describeInterpretation(filters, sermons.length),
-      sermons: sermons.map(toTranscriptRow),
+      sermons: sermons.map((s) => toTranscriptRow(s, transcribedIds.has(s.id))),
     })
   })
 
@@ -571,24 +570,18 @@ export function createRouter(anthropic: Anthropic): Hono {
   })
 
   // ── DB Browser data API ─────────────────────────────────────────────────
-  const DB_TABLES = new Set(['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons'])
-
   app.get('/api/db/:table', (c) => {
     const table = c.req.param('table')
-    if (!DB_TABLES.has(table)) {
+    if (!DB_BROWSER_TABLES.has(table)) {
       return c.json({ error: 'Unknown table' }, 400)
     }
 
     const limit = Math.min(Math.max(1, parseInt(c.req.query('limit') ?? '50', 10)), 200)
     const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10))
 
-    const db = getDb()
-    const pragma = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-    const columns = pragma.map((r) => r.name)
-    const { count } = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number }
-    const rawRows = db
-      .prepare(`SELECT * FROM ${table} ORDER BY rowid DESC LIMIT ? OFFSET ?`)
-      .all(limit, offset) as Record<string, unknown>[]
+    const columns = getTableColumns(table)
+    const count = getTableRowCount(table)
+    const rawRows = getTableRows(table, limit, offset)
 
     const rows = rawRows.map((row) => {
       const out: Record<string, unknown> = {}

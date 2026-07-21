@@ -168,7 +168,7 @@ export default function TranscriptsPage() {
           )}
         </div>
 
-        <div className={`my-3 min-h-[1.2em] text-[0.82rem] ${statusError ? 'text-[#ef8888]' : 'text-ink-dim'}`}>
+        <div className={`my-3 min-h-[1.2em] text-[0.82rem] ${statusError ? 'text-err-text' : 'text-ink-dim'}`}>
           {status}
         </div>
 
@@ -201,7 +201,7 @@ export default function TranscriptsPage() {
                       </div>
                       {r.excerpt && <div className="mt-1 max-w-[42ch] text-[0.82rem] text-ink-dim">{r.excerpt}</div>}
                     </td>
-                    <td className="block sm:table-cell px-3 py-2 sm:border-b sm:border-line align-top whitespace-nowrap text-[#bbb]">
+                    <td className="block sm:table-cell px-3 py-2 sm:border-b sm:border-line align-top whitespace-nowrap text-ink">
                       <span className="mb-0.5 block text-[0.65rem] uppercase tracking-[0.05em] text-ink-faint sm:hidden">
                         Date
                       </span>
@@ -212,7 +212,7 @@ export default function TranscriptsPage() {
                         Theme
                       </span>
                       {r.theme ? (
-                        <span className="inline-block rounded-full border border-[#3a2222] bg-[#1a1414] px-2.5 py-0.5 text-[0.75rem] text-[#e89]">
+                        <span className="inline-block rounded-full border border-accent/30 bg-accent-selected px-2.5 py-0.5 text-[0.75rem] text-accent">
                           {r.theme}
                         </span>
                       ) : (
@@ -225,7 +225,7 @@ export default function TranscriptsPage() {
                       </span>
                       {r.hasTranscript ? (
                         <a
-                          className="inline-block whitespace-nowrap rounded-md border border-[#3a2222] px-2.5 py-1.5 text-[0.85rem] text-accent transition-colors hover:bg-[#1a0e0e]"
+                          className="inline-block whitespace-nowrap rounded-md border border-accent/30 px-2.5 py-1.5 text-[0.85rem] text-accent transition-colors hover:bg-accent-selected"
                           href={r.downloadUrl}
                         >
                           Download PDF

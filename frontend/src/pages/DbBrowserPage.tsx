@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { getDbTable, ApiError } from '../api/client'
 import type { DbTablePage } from '../api/types'
 import { useAdminSecret } from '../lib/useAdminSecret'
+import { useInterval } from '../lib/useInterval'
 import TopBar from '../components/TopBar'
 
 const TABLES = ['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons']
 const LIMIT = 50
+const AUTO_REFRESH_INTERVAL_MS = 5000
 
 function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max)}…` : s
@@ -19,7 +21,6 @@ export default function DbBrowserPage() {
   const [message, setMessage] = useState('Enter your admin secret above, then select a table.')
   const [auto, setAuto] = useState(false)
 
-  const autoTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async () => {
@@ -47,13 +48,8 @@ export default function DbBrowserPage() {
     void load()
   }, [load])
 
-  // Auto-refresh toggle.
-  useEffect(() => {
-    if (auto) autoTimer.current = setInterval(() => void load(), 5000)
-    return () => {
-      if (autoTimer.current) clearInterval(autoTimer.current)
-    }
-  }, [auto, load])
+  // Auto-refresh toggle (no immediate call — the effect above already loaded).
+  useInterval(() => void load(), AUTO_REFRESH_INTERVAL_MS, auto, false)
 
   function onSecretChange(value: string) {
     if (debounce.current) clearTimeout(debounce.current)
@@ -92,8 +88,8 @@ export default function DbBrowserPage() {
               className={[
                 'rounded-md border px-3.5 py-1.5 text-[0.8rem] tracking-[0.02em] transition-colors',
                 t === table
-                  ? 'border-accent bg-[#1a0808] text-accent'
-                  : 'border-line-strong bg-surface text-ink-dim hover:border-line-strong hover:bg-[#181818] hover:text-[#ccc]',
+                  ? 'border-accent bg-accent-selected text-accent'
+                  : 'border-line-strong bg-surface text-ink-dim hover:border-line-strong hover:bg-surface-raised hover:text-ink',
               ].join(' ')}
             >
               {t}
@@ -139,7 +135,7 @@ export default function DbBrowserPage() {
                       const val = row[col]
                       if (val === null || val === undefined) {
                         return (
-                          <td key={col} className="border-b border-[#111] px-3.5 py-2 text-line">
+                          <td key={col} className="border-b border-line px-3.5 py-2 text-line">
                             —
                           </td>
                         )
@@ -147,7 +143,7 @@ export default function DbBrowserPage() {
                       const s = String(val)
                       if (s.startsWith('[blob:')) {
                         return (
-                          <td key={col} className="border-b border-[#111] px-3.5 py-2 italic text-[#3a3a3a]">
+                          <td key={col} className="border-b border-line px-3.5 py-2 italic text-ink-faint">
                             {s}
                           </td>
                         )
@@ -156,7 +152,7 @@ export default function DbBrowserPage() {
                         <td
                           key={col}
                           title={s.length > 80 ? s : undefined}
-                          className="max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap border-b border-[#111] px-3.5 py-2 text-[#bbb]"
+                          className="max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap border-b border-line px-3.5 py-2 text-ink"
                         >
                           {truncate(s, 80)}
                         </td>
@@ -173,7 +169,7 @@ export default function DbBrowserPage() {
 
         <div className="flex flex-shrink-0 items-center gap-3">
           <button
-            className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-[0.78rem] text-ink-dim transition-colors hover:bg-[#181818] hover:text-[#ccc] disabled:cursor-not-allowed disabled:border-line disabled:text-line"
+            className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-[0.78rem] text-ink-dim transition-colors hover:bg-surface-raised hover:text-ink disabled:cursor-not-allowed disabled:border-line disabled:text-line"
             disabled={offset === 0}
             onClick={() => setOffset(Math.max(0, offset - LIMIT))}
           >
@@ -183,7 +179,7 @@ export default function DbBrowserPage() {
             {total === 0 ? '' : `${from}–${to} of ${total.toLocaleString()}`}
           </span>
           <button
-            className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-[0.78rem] text-ink-dim transition-colors hover:bg-[#181818] hover:text-[#ccc] disabled:cursor-not-allowed disabled:border-line disabled:text-line"
+            className="rounded-md border border-line-strong bg-surface px-3 py-1.5 text-[0.78rem] text-ink-dim transition-colors hover:bg-surface-raised hover:text-ink disabled:cursor-not-allowed disabled:border-line disabled:text-line"
             disabled={to >= total}
             onClick={() => setOffset(offset + LIMIT)}
           >

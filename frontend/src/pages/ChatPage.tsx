@@ -1,25 +1,13 @@
 import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { streamChat } from '../api/client'
 import type { ChatMessage, ChatSource } from '../api/types'
 import ThemeToggle from '../components/ThemeToggle'
+import HamburgerIcon from '../components/HamburgerIcon'
 import { useNav } from '../contexts/NavContext'
 import { useConversations, type Conversation } from '../contexts/ConversationsContext'
-
-function HamburgerIcon() {
-  return (
-    <svg
-      width="20" height="20" viewBox="0 0 20 20"
-      fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <line x1="2.5" y1="5" x2="17.5" y2="5" />
-      <line x1="2.5" y1="10" x2="17.5" y2="10" />
-      <line x1="2.5" y1="15" x2="17.5" y2="15" />
-    </svg>
-  )
-}
 
 function conversationTitle(c: Conversation): string {
   const firstUser = c.turns.find((t) => t.role === 'user')
@@ -243,7 +231,7 @@ export default function ChatPage() {
                 ) : (
                   <div
                     className="prose-chat break-words rounded-2xl rounded-bl-sm border border-line bg-surface-raised px-4 py-2.5 text-[0.93rem] leading-relaxed text-ink"
-                    dangerouslySetInnerHTML={{ __html: marked.parse(t.content) as string }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(marked.parse(t.content) as string) }}
                   />
                 )}
                 {t.sources && t.sources.length > 0 && <Sources sources={t.sources} />}

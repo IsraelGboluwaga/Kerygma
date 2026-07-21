@@ -262,7 +262,7 @@ export async function ingestSermon(
       recordMissing(req, videoId, 'too_long', err.message)
       return { status: 'too_long', message: err.message }
     }
-    const message = err instanceof Error ? err.message : String(err)
+    const message = errMsg(err)
     recordMissing(req, videoId, classifyFailure(err), message)
     return { status: 'error', message }
   } finally {
