@@ -101,7 +101,10 @@ Typed functions for every DB operation:
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
 - `getSpeakersMatchingFilter(filter)` → `string[]` — distinct speaker names matching substring
 - `getChunksBySermonId(id)` → `ChunkRow[]`
-- `searchChunks(query, limit)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance
+- `searchChunks(query, limit, speaker?)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance. The optional `speaker` is matched (case-insensitive substring) inside the SQL query itself, before the `LIMIT`, so a speaker filter narrows the ranked set instead of discarding rows from an already-limited top-N sample
+- `getSermonsBySpeaker(speaker)` → `SermonRow[]` — speaker/alias substring match done in SQL (not a broad fetch-then-filter-in-JS)
+- `getSermonIdsWithTranscription(sermonIds)` → `Set<number>` — batched `hasTranscript` existence check for a page of sermon rows (one query, not one per row)
+- `getTableColumns` / `getTableRowCount` / `getTableRows` / `DB_BROWSER_TABLES` — the DB browser's raw-SQL access, validated against the `DB_BROWSER_TABLES` allow-list (table names can't be bound as query params)
 - `listSermons(limit)` → `SermonRow[]`
 - `upsertTheme(theme)` → `number` — inserts/updates a theme keyed on its upstream id, returns the local `themes.id`
 - `getSermonsByTheme(themeId)` → `SermonRow[]` — all sermons for an upstream theme id, newest first
@@ -194,6 +197,9 @@ the `jobs` DB table so history survives server restarts.
 
 Job phases are reported through the `setPhase` callback, giving the status dashboard live sub-step visibility without adding log volume. Ingestion uses `downloading → transcribing → chunking → embedding`; book generation uses `retrieving → outlining → drafting → rendering`.
 
+### `src/citations.ts`
+`formatSermonExcerpt`/`formatSermonExcerpts` — the shared `[title | ... | timestamp | URL]\ncontent` excerpt format (and its `EXCERPT_CONTENT_CAP` truncation length) used by both the MCP server's `buildContext()` and the chat's `search_sermon_excerpts` tool, so the citation format and cap live in one place instead of two independently-maintained copies.
+
 ### `src/mcp/server.ts`
 `createMcpServer(anthropic)` — accepts an injected Anthropic client.
 Registers 4 tools:
@@ -202,19 +208,21 @@ Registers 4 tools:
 3. `summarise_sermon(date, speaker?)` — full Claude-synthesised summary of a sermon; speaker disambiguation + nearest-date fallback
 4. `search_teachings(topic, speaker_filter?)` — topic search; speaker disambiguation built in
 
-Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`.
+Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`, `textResult`/`textContent` (build a `CallToolResult` from plain text). Once `speaker_filter` is resolved to a single canonical name (via `resolveSpeaker`/`getSpeakersMatchingFilter`), `ask_church` and `search_teachings` pass it straight into `searchChunks(query, limit, speaker)` so the DB filters before the row limit is applied, instead of fetching a fixed-size sample and discarding non-matching rows afterward.
 
 ### `frontend/` — React + Vite SPA
 The entire member- and admin-facing UI is a single-page React app (TypeScript + Tailwind, mobile-responsive) built by Vite. The backend no longer renders HTML — it exposes JSON/SSE APIs under `/api/*` (plus the PDF download) and serves the built SPA. Key files:
 - `frontend/src/App.tsx` — `react-router-dom` routes: `/` (chat), `/transcripts`, `/transcripts/:videoId`, `/admin`, `/admin/books`, `/admin/live`, `/lyrical-theology`, and a 404
 - `frontend/src/api/client.ts` — typed fetch wrappers + the chat SSE reader (`streamChat`, an async generator yielding `delta`/`context`/`done`/`error` frames); `frontend/src/api/types.ts` mirrors the backend response shapes
-- `frontend/src/pages/ChatPage.tsx` — message thread, streaming assistant bubbles (markdown via `marked`), collapsible "Sources", auto-growing input
+- `frontend/src/pages/ChatPage.tsx` — message thread, streaming assistant bubbles (markdown via `marked`, sanitized with `dompurify` before rendering), collapsible "Sources", auto-growing input
 - `frontend/src/pages/TranscriptsPage.tsx` — NL search box + structured filters (month/year/theme/speaker), responsive results table
 - `frontend/src/pages/TranscriptViewPage.tsx` — single transcript, timestamped segments or paragraph fallback, Download PDF link
 - `frontend/src/pages/AdminPage.tsx` — secret-gated stats + recent jobs, "Sync Now", 30 s auto-refresh, and a link to the Generate-Book page
 - `frontend/src/pages/BookGenPage.tsx` — the Generate-Book page (`/admin/books`): topic form (`POST /api/admin/book-gen`) + a books table with a live progress column (`chaptersGenerated / chapterCount`) and Download-PDF links, polling every 5 s
 - `frontend/src/pages/LiveStatusPage.tsx` — phase stepper (Download → Transcribe → Chunk → Embed), queue + recent tables, polls every 2 s
 - `frontend/src/pages/DbBrowserPage.tsx` — secret-gated paginated table explorer (BLOBs shown as `[blob: NB]`)
+- `frontend/src/components/HamburgerIcon.tsx` — shared mobile-nav icon (used by `TopBar`, `ChatPage`, `TranscriptViewPage`)
+- `frontend/src/lib/useInterval.ts` — shared `useInterval(callback, ms, enabled?, immediate?)` hook wrapping the repeated poll-on-an-interval pattern used by `AdminPage`, `LiveStatusPage`, and `DbBrowserPage`'s auto-refresh toggle
 - The admin secret lives in `sessionStorage` (`frontend/src/lib/useAdminSecret.ts`) and is sent as `X-Admin-Secret`
 
 In dev, the Vite dev server (`:5173`) serves the SPA and proxies `/api`, `/assets`, `/health`, `/mcp`, and `/transcripts/*/download` to the Hono server (`:3000`). In production, `yarn build:web` emits the SPA to `public/app/` and Hono serves it.
@@ -240,7 +248,7 @@ Pure formatting helpers shared by the transcripts table, view, and PDF: `formatS
 Hono app wiring all routes. The UI pages are client-side routes served by the SPA catch-all; this layer is JSON/SSE + static serving only.
 
 **Chat**
-- `POST /api/chat` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given two read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`): `search_sermon_excerpts` (FTS5 chunk search, a relevant sample) and `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
+- `POST /api/chat` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given three read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`): `search_sermon_excerpts` (FTS5 chunk search, a relevant sample), `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any), and `find_sermon` (look up a named sermon's details, notably its YouTube link). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
 
 **Transcripts** — public, read-only transcript delivery
 - `GET /api/themes` — returns `{ id, name }[]` for the structured filter dropdown
