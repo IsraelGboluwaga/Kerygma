@@ -42,6 +42,8 @@ Three read-only tools, dispatched by `runChatTool()` in `src/web/router.ts`:
 
 `find_sermon` matches the requested text against the sermon **title** (case-insensitive substring), so a member can name a sermon and get its watch link without knowing the exact title. When the matched sermon has no `webpage_url` on file the result says `YouTube: (no link on file)` and the system prompt instructs Claude to say so plainly rather than invent a URL.
 
+All three tools' optional `speaker` filter resolves aliases the same way, via a shared `matchesSpeaker()` helper in `router.ts` (alias → canonical name via `resolveAliasToCanonical`, then a case-insensitive substring match) — this used to be reimplemented per tool and had drifted, so `find_sermon` silently skipped alias resolution. `search_sermon_excerpts` pushes the resolved speaker into the `searchChunks()` SQL query itself (rather than filtering the top-10 rows in JS afterward), so a speaker filter narrows the ranked set instead of shrinking a fixed-size sample.
+
 The system prompt steers tool selection explicitly: use `list_sermons` (not excerpt search) for any list/count, treat its result as the authoritative complete set, and don't caveat with "these are only the ones in the excerpts I was given" — the exact failure mode that motivated this design. For a link/video request about a named sermon, it routes to `find_sermon`.
 
 ### 4. Agentic loop & streaming

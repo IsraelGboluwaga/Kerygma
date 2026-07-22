@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getStatusData, ApiError } from '../api/client'
 import type { Job } from '../api/types'
 import { useAdminSecret } from '../lib/useAdminSecret'
+import { useInterval } from '../lib/useInterval'
 import TopBar from '../components/TopBar'
 import Badge from '../components/Badge'
+
+const REFRESH_INTERVAL_MS = 2000
 
 const PHASES = [
   { key: 'downloading', label: 'Download' },
@@ -27,7 +30,7 @@ function Stepper({ phase }: { phase?: string }) {
                 className={[
                   'flex h-7 w-7 items-center justify-center rounded-full border-2 text-[0.8rem]',
                   done
-                    ? 'border-[#004020] bg-badge-done-bg text-badge-done-fg'
+                    ? 'border-badge-done-fg bg-badge-done-bg text-badge-done-fg'
                     : active
                       ? 'animate-pulse border-badge-running-fg bg-badge-running-bg text-badge-running-fg'
                       : 'border-line-strong bg-surface-sunken text-ink-ghost',
@@ -44,7 +47,7 @@ function Stepper({ phase }: { phase?: string }) {
               </div>
             </div>
             {i < PHASES.length - 1 && (
-              <div className={`mb-5 h-0.5 w-10 ${done ? 'bg-[#004020]' : 'bg-[#222]'}`} />
+              <div className={`mb-5 h-0.5 w-10 ${done ? 'bg-badge-done-fg' : 'bg-line-strong'}`} />
             )}
           </div>
         )
@@ -77,11 +80,7 @@ export default function LiveStatusPage() {
     }
   }, [secret])
 
-  useEffect(() => {
-    void refresh()
-    const id = setInterval(() => void refresh(), 2000)
-    return () => clearInterval(id)
-  }, [refresh])
+  useInterval(() => void refresh(), REFRESH_INTERVAL_MS)
 
   const running = jobs.find((j) => j.status === 'running')
   const queued = jobs.filter((j) => j.status === 'queued').sort((a, b) => (a.position || 99) - (b.position || 99))
@@ -118,12 +117,12 @@ export default function LiveStatusPage() {
           {!hasSecret ? (
             <span className="italic text-ink-ghost">Enter the admin secret to view status.</span>
           ) : authError ? (
-            <span className="text-[#ef8888]">Wrong admin secret.</span>
+            <span className="text-err-text">Wrong admin secret.</span>
           ) : !running ? (
             <span className="italic text-ink-ghost">Idle — nothing is processing right now.</span>
           ) : (
             <>
-              <div className="mb-5 text-[1.05rem] font-semibold text-[#eee]">
+              <div className="mb-5 text-[1.05rem] font-semibold text-ink-bright">
                 {running.title || 'Untitled'}
                 {running.startedAt && (
                   <span className="text-[0.78rem] text-ink-faint">
@@ -156,10 +155,10 @@ export default function LiveStatusPage() {
               <tbody>
                 {queued.map((j) => (
                   <tr key={j.id}>
-                    <td className="border-b border-[#141414] px-3 py-2 tabular-nums text-badge-queued-fg">
+                    <td className="border-b border-line px-3 py-2 tabular-nums text-badge-queued-fg">
                       {j.position != null ? `#${j.position}` : '—'}
                     </td>
-                    <td className="border-b border-[#141414] px-3 py-2 text-[#ccc]">{j.title || '—'}</td>
+                    <td className="border-b border-line px-3 py-2 text-ink">{j.title || '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -188,16 +187,16 @@ export default function LiveStatusPage() {
               <tbody>
                 {recent.map((j) => (
                   <tr key={j.id}>
-                    <td className="border-b border-[#141414] px-3 py-2 text-[#ccc]">
+                    <td className="border-b border-line px-3 py-2 text-ink">
                       {new Date(j.completedAt || j.createdAt).toLocaleString()}
                     </td>
-                    <td className="border-b border-[#141414] px-3 py-2 text-[#ccc]">{j.title || '—'}</td>
-                    <td className="border-b border-[#141414] px-3 py-2">
+                    <td className="border-b border-line px-3 py-2 text-ink">{j.title || '—'}</td>
+                    <td className="border-b border-line px-3 py-2">
                       <Badge status={j.status} />
                     </td>
                     <td
-                      className={`border-b border-[#141414] px-3 py-2 ${
-                        j.status === 'failed' ? 'text-[#ef8888]' : 'text-ink-faint'
+                      className={`border-b border-line px-3 py-2 ${
+                        j.status === 'failed' ? 'text-err-text' : 'text-ink-faint'
                       }`}
                     >
                       {j.message || j.error || ''}

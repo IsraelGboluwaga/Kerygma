@@ -15,26 +15,23 @@ import {
   type ChunkWithSermon,
 } from '../db/queries.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
+import { formatSermonExcerpts } from '../citations.js'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-const CHUNK_CONTENT_CAP = 800
+function textContent(text: string): CallToolResult['content'] {
+  return [{ type: 'text', text }]
+}
 
-function buildContext(
-  results: Array<{
-    sermon_title: string
-    date: string
-    timestamp_start: number
-    content: string
-    webpage_url?: string | null
-  }>
-): string {
-  return results
-    .map((r) => {
-      const header = `[${r.sermon_title} | ${r.date} | ${formatTimestamp(r.timestamp_start)}${r.webpage_url ? ` | Watch: ${r.webpage_url}` : ''}]`
-      return `${header}\n${r.content.slice(0, CHUNK_CONTENT_CAP)}`
-    })
-    .join('\n\n')
+function textResult(text: string): CallToolResult {
+  return { content: textContent(text) }
+}
+
+function buildContext(results: ChunkWithSermon[]): string {
+  return formatSermonExcerpts(
+    results.map((r) => ({ ...r, url: r.webpage_url ?? null })),
+    { urlLabel: 'Watch' }
+  )
 }
 
 type SpeakerResolution =
@@ -58,12 +55,12 @@ function resolveSpeaker(filter: string): SpeakerResolution {
 
 type SpeakerFilterResult =
   | { ok: true; name: string | undefined }
-  | { ok: false; response: { content: [{ type: 'text'; text: string }] } }
+  | { ok: false; response: CallToolResult }
 
 function resolveSpeakerFilter(filter: string | undefined): SpeakerFilterResult {
   if (!filter) return { ok: true, name: undefined }
   const resolution = resolveSpeaker(filter)
-  if (!resolution.ok) return { ok: false, response: { content: [{ type: 'text', text: resolution.message }] } }
+  if (!resolution.ok) return { ok: false, response: textResult(resolution.message) }
   return { ok: true, name: resolution.name }
 }
 
@@ -79,7 +76,7 @@ function nearestDateMessage(date: string): string {
 
 type DateQueryResult =
   | { ok: true; chunks: ChunkWithSermon[] }
-  | { ok: false; content: [{ type: 'text'; text: string }] }
+  | { ok: false; content: CallToolResult['content'] }
 
 // Shared by ask_church (date_filter branch) and summarise_sermon
 function fetchChunksByDateAndSpeaker(
@@ -88,7 +85,7 @@ function fetchChunksByDateAndSpeaker(
 ): DateQueryResult {
   let sermons = getSermonsByDate(date)
   if (sermons.length === 0) {
-    return { ok: false, content: [{ type: 'text', text: nearestDateMessage(date) }] }
+    return { ok: false, content: textContent(nearestDateMessage(date)) }
   }
   if (resolvedSpeaker) {
     const lower = resolvedSpeaker.toLowerCase()
@@ -96,7 +93,7 @@ function fetchChunksByDateAndSpeaker(
     if (sermons.length === 0) {
       return {
         ok: false,
-        content: [{ type: 'text', text: `No sermons by "${resolvedSpeaker}" found on ${date}.` }],
+        content: textContent(`No sermons by "${resolvedSpeaker}" found on ${date}.`),
       }
     }
   }
@@ -142,14 +139,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
       const rows = listSermons(limit)
 
       if (rows.length === 0) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'No sermons have been indexed yet. Please contact the administrator to add sermons.',
-            },
-          ],
-        }
+        return textResult('No sermons have been indexed yet. Please contact the administrator to add sermons.')
       }
 
       const text = rows
@@ -159,7 +149,7 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
         )
         .join('\n\n')
 
-      return { content: [{ type: 'text', text }] }
+      return textResult(text)
     }
   )
 
@@ -190,19 +180,13 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
         if (!dateResult.ok) return dateResult
         results = dateResult.chunks
       } else {
-        results = searchChunks(question, 10)
-        if (resolvedSpeaker) {
-          const lower = resolvedSpeaker.toLowerCase()
-          results = results.filter((r) => r.speaker?.toLowerCase() === lower)
-        }
+        // Filter by speaker in the query itself (not after the top-10 limit)
+        // so a speaker filter narrows the ranked set instead of shrinking it.
+        results = searchChunks(question, 10, resolvedSpeaker)
       }
 
       if (results.length === 0) {
-        return {
-          content: [
-            { type: 'text', text: 'No relevant content found. Try ingesting more sermons first.' },
-          ],
-        }
+        return textResult('No relevant content found. Try ingesting more sermons first.')
       }
 
       const context = buildContext(results)
@@ -229,7 +213,7 @@ If the excerpts don't contain enough information to answer, say so.`,
 
       const text =
         response.content[0].type === 'text' ? response.content[0].text : ''
-      return { content: [{ type: 'text', text }] }
+      return textResult(text)
     }
   )
 
@@ -300,7 +284,7 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
 
       const text =
         response.content[0].type === 'text' ? response.content[0].text : ''
-      return { content: [{ type: 'text', text }] }
+      return textResult(text)
     }
   )
 
@@ -320,17 +304,12 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
       if (!sf.ok) return sf.response
       const resolvedSpeaker = sf.name
 
-      let results = searchChunks(topic, 20)
-
-      if (resolvedSpeaker) {
-        const lower = resolvedSpeaker.toLowerCase()
-        results = results.filter((r) => r.speaker?.toLowerCase() === lower)
-      }
+      // Filter by speaker in the query itself (not after the top-20 limit) so
+      // a speaker filter narrows the ranked set instead of shrinking it.
+      const results = searchChunks(topic, 20, resolvedSpeaker)
 
       if (results.length === 0) {
-        return {
-          content: [{ type: 'text', text: `No teachings found on '${topic}'.` }],
-        }
+        return textResult(`No teachings found on '${topic}'.`)
       }
 
       const grouped = new Map<string, typeof results>()
@@ -360,7 +339,7 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
         })
         .join('\n\n---\n\n')
 
-      return { content: [{ type: 'text', text }] }
+      return textResult(text)
     }
   )
 

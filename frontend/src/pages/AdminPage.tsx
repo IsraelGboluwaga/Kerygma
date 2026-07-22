@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { getAdminJobs, getAdminStatus, syncApi } from '../api/client'
 import type { AdminStatus, Job } from '../api/types'
 import { useAdminSecret } from '../lib/useAdminSecret'
+import { useInterval } from '../lib/useInterval'
 import { fmtDateTime, fmtRelative } from '../lib/format'
 import TopBar from '../components/TopBar'
 import Badge from '../components/Badge'
+
+const REFRESH_INTERVAL_MS = 30_000
 
 export default function AdminPage() {
   const [secret, setSecret] = useAdminSecret()
@@ -16,8 +19,6 @@ export default function AdminPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [syncMsg, setSyncMsg] = useState('')
   const [syncing, setSyncing] = useState(false)
-
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(async () => {
     if (!secret) return
@@ -32,14 +33,7 @@ export default function AdminPage() {
     }
   }, [secret])
 
-  useEffect(() => {
-    if (!secret) return
-    void refresh()
-    timer.current = setInterval(() => void refresh(), 30_000)
-    return () => {
-      if (timer.current) clearInterval(timer.current)
-    }
-  }, [secret, refresh])
+  useInterval(() => void refresh(), REFRESH_INTERVAL_MS, !!secret)
 
   async function onSync() {
     setSyncing(true)
@@ -118,7 +112,7 @@ export default function AdminPage() {
 
           <div className="max-h-[420px] overflow-y-auto">
             {authError ? (
-              <em className="text-[#ef8888]">Wrong secret or server error.</em>
+              <em className="text-err-text">Wrong secret or server error.</em>
             ) : !loaded ? (
               <em className="text-ink-ghost">Enter your admin secret above to view jobs.</em>
             ) : jobs.length === 0 ? (
@@ -140,14 +134,14 @@ export default function AdminPage() {
                 <tbody>
                   {jobs.map((j) => (
                     <tr key={j.id}>
-                      <td className="whitespace-nowrap border-b border-[#141414] px-3 py-2 text-[#ccc]">
+                      <td className="whitespace-nowrap border-b border-line px-3 py-2 text-ink">
                         {fmtDateTime(j.createdAt)}
                       </td>
-                      <td className="border-b border-[#141414] px-3 py-2 text-[#ccc]">{j.title || '—'}</td>
-                      <td className="border-b border-[#141414] px-3 py-2">
+                      <td className="border-b border-line px-3 py-2 text-ink">{j.title || '—'}</td>
+                      <td className="border-b border-line px-3 py-2">
                         <Badge status={j.status} />
                       </td>
-                      <td className="max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap border-b border-[#141414] px-3 py-2 text-ink-faint">
+                      <td className="max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap border-b border-line px-3 py-2 text-ink-faint">
                         {j.message || j.error || ''}
                       </td>
                     </tr>
@@ -190,7 +184,7 @@ function Stat({
   return (
     <div className="rounded-md border border-line bg-surface-sunken px-5 py-4">
       <div className="mb-1.5 text-[0.72rem] uppercase tracking-[0.05em] text-ink-faint">{label}</div>
-      <div className={`font-semibold text-white ${small ? 'pt-1 text-base' : 'text-2xl'}`}>{value}</div>
+      <div className={`font-semibold text-ink-bright ${small ? 'pt-1 text-base' : 'text-2xl'}`}>{value}</div>
       {sub && <div className="mt-0.5 text-[0.78rem] text-ink-ghost">{sub}</div>}
     </div>
   )

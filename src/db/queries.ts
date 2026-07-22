@@ -90,6 +90,9 @@ export interface ChunkRow {
   timestamp_end: number
   topics: string | null
   summary: string | null
+  // 384-dim Float32 vector, generated at ingest and stored so a future
+  // vector-search path can be added without re-embedding the library.
+  // FTS5 (searchChunks) is the only search path today — this isn't queried.
   embedding: Buffer | null
 }
 
@@ -209,6 +212,17 @@ export function getTranscriptionBySermonId(sermonId: number): TranscriptionRow |
   )
 }
 
+// Batched existence check for `hasTranscript` flags — one query for a whole
+// result page instead of one `getTranscriptionBySermonId` lookup per row.
+export function getSermonIdsWithTranscription(sermonIds: number[]): Set<number> {
+  if (sermonIds.length === 0) return new Set()
+  const placeholders = sermonIds.map(() => '?').join(',')
+  const rows = getDb()
+    .prepare(`SELECT sermon_id FROM transcriptions WHERE sermon_id IN (${placeholders})`)
+    .all(...sermonIds) as { sermon_id: number }[]
+  return new Set(rows.map((r) => r.sermon_id))
+}
+
 export function saveChunks(sermonId: number, chunks: SaveChunkInput[]): void {
   const database = getDb()
   const insert = database.prepare(
@@ -285,6 +299,17 @@ export function getSermonsByThemeName(name: string): SermonRow[] {
        AND s.ingestion_status = 'done' ORDER BY s.date DESC`
     )
     .all(`%${name}%`) as SermonRow[]
+}
+
+// Sermons by a speaker name/alias substring match, filtered in SQL rather than
+// fetching a broad roster to filter in memory.
+export function getSermonsBySpeaker(speaker: string): SermonRow[] {
+  return getDb()
+    .prepare(
+      `${SERMON_SELECT} WHERE s.speaker IS NOT NULL AND LOWER(s.speaker) LIKE LOWER(?)
+       AND s.ingestion_status = 'done' ORDER BY s.date DESC`
+    )
+    .all(`%${speaker}%`) as SermonRow[]
 }
 
 // Distinct sermons whose chunks match an FTS query, ranked by best chunk relevance.
@@ -365,19 +390,24 @@ export function getChunksBySermonId(sermonId: number): ChunkRow[] {
     .all(sermonId) as ChunkRow[]
 }
 
-export function searchChunks(query: string, limit = 10): ChunkWithSermon[] {
-  return getDb()
-    .prepare(
-      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker, t.name AS theme
+// `speaker`, when given, matches as a case-insensitive substring on s.speaker
+// and is applied inside the query — before the LIMIT — so a speaker filter
+// narrows the ranked result set instead of discarding rows from a fixed-size
+// top-N sample (which could otherwise return fewer than `limit` matches).
+export function searchChunks(query: string, limit = 10, speaker?: string): ChunkWithSermon[] {
+  const speakerClause = speaker ? `AND LOWER(s.speaker) LIKE '%' || LOWER(?) || '%'` : ''
+  const stmt = getDb().prepare(
+    `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker, t.name AS theme
        FROM chunks_fts fts
        JOIN chunks c ON c.id = fts.rowid
        JOIN sermons s ON s.id = c.sermon_id
        LEFT JOIN themes t ON t.id = s.theme_id
-       WHERE chunks_fts MATCH ?
+       WHERE chunks_fts MATCH ? ${speakerClause}
        ORDER BY rank
        LIMIT ?`
-    )
-    .all(sanitizeFtsQuery(query), limit) as ChunkWithSermon[]
+  )
+  const params = speaker ? [sanitizeFtsQuery(query), speaker, limit] : [sanitizeFtsQuery(query), limit]
+  return stmt.all(...params) as ChunkWithSermon[]
 }
 
 export function listSermons(limit = 20): SermonRow[] {
@@ -711,4 +741,46 @@ export function listBooks(limit = 50): BookRow[] {
   return getDb()
     .prepare(`SELECT * FROM books ORDER BY created_at DESC, id DESC LIMIT ?`)
     .all(limit) as BookRow[]
+}
+
+// ── Admin DB browser ─────────────────────────────────────────────────────────
+// The one allow-list of tables the raw DB browser may read. Table names can't
+// be bound as query params, so every function here validates against this set
+// before interpolating one into SQL.
+export const DB_BROWSER_TABLES = new Set([
+  'sermons',
+  'themes',
+  'transcriptions',
+  'chunks',
+  'jobs',
+  'missing_sermons',
+  'books',
+  'book_chapters',
+])
+
+function assertBrowsableTable(table: string): void {
+  if (!DB_BROWSER_TABLES.has(table)) throw new Error(`Unknown table: ${table}`)
+}
+
+export function getTableColumns(table: string): string[] {
+  assertBrowsableTable(table)
+  const pragma = getDb().prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  return pragma.map((r) => r.name)
+}
+
+export function getTableRowCount(table: string): number {
+  assertBrowsableTable(table)
+  const row = getDb().prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number }
+  return row.count
+}
+
+export function getTableRows(
+  table: string,
+  limit: number,
+  offset: number
+): Record<string, unknown>[] {
+  assertBrowsableTable(table)
+  return getDb()
+    .prepare(`SELECT * FROM ${table} ORDER BY rowid DESC LIMIT ? OFFSET ?`)
+    .all(limit, offset) as Record<string, unknown>[]
 }

@@ -1,6 +1,22 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// router.js pulls in scheduler.js -> ingestion/pipeline.js -> ingestion/embedder.js,
+// which loads @xenova/transformers (and its native `sharp` dependency) at import
+// time. None of these tests touch ingestion, so mock it out the same way
+// tests/ingestion.test.ts does to avoid a hard crash in sandboxes where sharp's
+// prebuilt binary can't be downloaded.
+vi.mock('../src/ingestion/embedder.js', () => ({
+  generateEmbedding: vi.fn().mockResolvedValue(Buffer.alloc(1536)),
+  loadEmbedder: vi.fn(),
+}))
+
 import { initDatabase } from '../src/db/connection.js'
-import { saveSermon, saveChunks, type SaveSermonInput } from '../src/db/queries.js'
+import {
+  saveSermon,
+  saveChunks,
+  upsertSpeakerAlias,
+  type SaveSermonInput,
+} from '../src/db/queries.js'
 import { runChatTool } from '../src/web/router.js'
 
 beforeEach(() => {
@@ -91,6 +107,20 @@ describe('runChatTool — find_sermon', () => {
     )
 
     const { text } = runChatTool('find_sermon', { title: 'grace', speaker: 'Laju' })
+    expect(text).toContain('https://youtu.be/laju')
+    expect(text).not.toContain('https://youtu.be/other')
+  })
+
+  it('resolves a speaker alias the same way list_sermons does (regression: find_sermon used to skip alias resolution)', () => {
+    upsertSpeakerAlias('the apostle', 'Pst. Laju Iren')
+    saveSermon(
+      sermon({ title: 'Grace', date: '2023-06-01', speaker: 'Pst. Laju Iren', webpage_url: 'https://youtu.be/laju' })
+    )
+    saveSermon(
+      sermon({ title: 'Grace', date: '2023-06-08', speaker: 'Someone Else', webpage_url: 'https://youtu.be/other' })
+    )
+
+    const { text } = runChatTool('find_sermon', { title: 'grace', speaker: 'the apostle' })
     expect(text).toContain('https://youtu.be/laju')
     expect(text).not.toContain('https://youtu.be/other')
   })
