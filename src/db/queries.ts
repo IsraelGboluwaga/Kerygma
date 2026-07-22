@@ -90,6 +90,9 @@ export interface ChunkRow {
   timestamp_end: number
   topics: string | null
   summary: string | null
+  // 384-dim Float32 vector, generated at ingest and stored so a future
+  // vector-search path can be added without re-embedding the library.
+  // FTS5 (searchChunks) is the only search path today — this isn't queried.
   embedding: Buffer | null
 }
 

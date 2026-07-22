@@ -133,6 +133,9 @@ async function chunkEmbedSave(
   logger.debug(`Chunking "${title}" with Claude...`)
   const chunks = await chunkSermon(segments, anthropic)
 
+  // Embeddings aren't queried by any current search path (FTS5 handles all
+  // search today) — generating and storing them now leaves the door open for
+  // a future vector-search path without having to re-embed the whole library.
   onPhase?.('embedding')
   logger.debug(`Embedding ${chunks.length} chunk(s) for "${title}"...`)
   const chunksWithEmbeddings = await Promise.all(

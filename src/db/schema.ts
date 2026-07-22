@@ -45,7 +45,7 @@ export function initDb(db: Database.Database): void {
       timestamp_end   REAL NOT NULL,
       topics          TEXT,
       summary         TEXT,
-      embedding       BLOB
+      embedding       BLOB -- 384-dim Float32 vector, generated but not queried yet — kept for a future vector-search path alongside FTS5
     );
 
     CREATE TABLE IF NOT EXISTS jobs (
