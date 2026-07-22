@@ -1,8 +1,19 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import type Anthropic from '@anthropic-ai/sdk'
+
+// router.js pulls in scheduler.js -> ingestion/pipeline.js -> ingestion/embedder.js,
+// which loads @xenova/transformers (and its native `sharp` dependency) at import
+// time. None of these tests touch ingestion, so mock it out the same way
+// tests/ingestion.test.ts does to avoid a hard crash in sandboxes where sharp's
+// prebuilt binary can't be downloaded.
+vi.mock('../src/ingestion/embedder.js', () => ({
+  generateEmbedding: vi.fn().mockResolvedValue(Buffer.alloc(1536)),
+  loadEmbedder: vi.fn(),
+}))
+
 import { initDatabase } from '../src/db/connection.js'
 import { createRouter } from '../src/web/router.js'
 
