@@ -144,11 +144,24 @@ Exported as an async generator: `fetchAllSermons(): AsyncGenerator<IngestRequest
 - Exports `formatTimestamp` (used by router and MCP tools)
 
 ### `src/ingestion/embedder.ts`
-Loads `Xenova/all-MiniLM-L6-v2` once at startup (~90MB download on first run).
-`generateEmbedding(text)` returns a `Buffer` of raw Float32 bytes (384 floats = 1536 bytes).
-Vectors are L2-normalised (`normalize: true`), so cosine similarity reduces to a dot product.
-Stored in `chunks.embedding BLOB` and queried by the hybrid retrieval path (`src/retrieval.ts`):
-the same embedder embeds the incoming query, which is scored against these vectors.
+Loads `Xenova/all-MiniLM-L6-v2` once at startup (~90MB download on first run). The
+`@xenova/transformers` version is **pinned** (exact, not `^`) so the model build — and
+therefore the vector space — can't drift under a reinstall; every chunk and every query must
+be embedded by the identical build or cosine comparisons between them are invalid.
+`generateEmbedding(text)` returns a `Buffer` of raw Float32 bytes (384 floats = 1536 bytes),
+L2-normalised (`normalize: true`) so cosine similarity reduces to a dot product. Stored in
+`chunks.embedding BLOB` and queried by the hybrid retrieval path (`src/retrieval.ts`): the same
+embedder embeds the incoming query, which is scored against these vectors.
+
+MiniLM truncates at ~256 word-pieces, so a long chunk's tail would never reach its vector.
+`generateEmbedding` avoids that: `splitIntoWindows` splits text over `EMBED_MAX_WORDS` (180)
+into overlapping windows (`EMBED_WINDOW_OVERLAP` = 20 words), each window is embedded, and the
+per-window unit vectors are mean-pooled and re-normalised into one unit vector — so the whole
+section is represented while the single-vector-per-chunk storage shape (and the retrieval scan)
+is unchanged. Short text and every chat query stay a single window, byte-identical to the
+previous single-pass behaviour. Only long chunks re-embedded on a future ingest gain the fuller
+vector; old and new vectors remain comparable (same model, both unit vectors), so no forced
+re-embed.
 
 ### `src/retrieval.ts`
 Hybrid excerpt retrieval — the search path behind the chat's `search_sermon_excerpts`

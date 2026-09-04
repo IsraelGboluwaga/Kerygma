@@ -107,6 +107,8 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 - Transcripts are stored in the `transcriptions` table (one-to-one with `sermons` via `sermon_id` FK) to keep `sermons` queries fast.
 - Resume logic checks `transcriptions` table first, falls back to `sermons.transcription` for backward compat with older rows.
 - Surface job progress as **structured state, not log lines.** Report sub-steps via the `onPhase` reporter (which the queue maps to the job's `phase` field), and keep per-step `logger` calls at `debug`. This keeps default `info` logs quiet while the status dashboard stays informative.
+- **Embeddings are window-pooled** (`src/ingestion/embedder.ts`): `all-MiniLM-L6-v2` truncates at ~256 word-pieces, so `generateEmbedding` splits long text into overlapping word windows (`splitIntoWindows`), embeds each, and mean-pools + re-normalises into **one** unit vector per chunk. Keep it one vector per chunk (the storage shape and retrieval scan depend on it) and keep the output L2-normalised (cosine == dot). Short text and queries stay a single window — don't special-case them elsewhere.
+- **Pin the embedder.** `@xenova/transformers` is pinned to an exact version (no `^`) on purpose: the model build defines the vector space, and every chunk + query must share it. Don't loosen the range, and if you change the model or turn off quantization you must **re-embed the whole corpus** (old and new vectors are otherwise incomparable).
 
 ### Job queue
 - The queue (`src/queue.ts`) owns all job state. A job fn receives a `JobContext`; report progress with `ctx.setPhase(...)` rather than mutating job records elsewhere.
