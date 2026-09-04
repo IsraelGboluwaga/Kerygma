@@ -239,6 +239,9 @@ Job phases are reported through the `setPhase` callback, giving the status dashb
 ### `src/citations.ts`
 `formatSermonExcerpt`/`formatSermonExcerpts` — the shared `[title | ... | timestamp | URL]\ncontent` excerpt format (and its `EXCERPT_CONTENT_CAP` truncation length) used by both the MCP server's `buildContext()` and the chat's `search_sermon_excerpts` tool, so the citation format and cap live in one place instead of two independently-maintained copies.
 
+### `src/citations.ts`
+`formatSermonExcerpt`/`formatSermonExcerpts` — the shared `[title | ... | timestamp | URL]\ncontent` excerpt format (and its `EXCERPT_CONTENT_CAP` truncation length) used by both the MCP server's `buildContext()` and the chat's `search_sermon_excerpts` tool, so the citation format and cap live in one place instead of two independently-maintained copies.
+
 ### `src/mcp/server.ts`
 `createMcpServer(anthropic)` — accepts an injected Anthropic client.
 Registers 4 tools:
