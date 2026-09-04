@@ -330,17 +330,21 @@ Member opens browser → GET / → SPA shell (public/app/index.html) → ChatPag
 
 Member types question → POST /api/chat { messages: [...] }
     → 404 if countSermons() === 0
-    → agentic loop (≤6 steps), each step = anthropic.messages.stream(... CHAT_TOOLS):
-        stream { type: 'delta', text }            token by token
-        finalMessage → stop_reason !== 'tool_use'? end loop
-        else await runChatTool() per tool_use block:
-            search_sermon_excerpts → hybridSearchChunks(query)  FTS5 + vector, RRF-fused (top 15)
-            list_sermons           → resolveTranscriptSermons  COMPLETE roster
-            find_sermon            → findSermonsByTitle        named sermon + YouTube link
-        { type: 'context', sources }              cumulative citations
-        append tool_result blocks, continue
+    → agentic loop (≤6 steps), each step = anthropic.messages.stream(...):
+        tools offered on every step EXCEPT the last (forces a final answer)
+        turn text is BUFFERED, not streamed — a turn that ends in a tool call
+          is a "let me search…" preamble and is discarded
+        finalMessage → stop_reason === 'tool_use'?
+            await runChatTool() per tool_use block:
+                search_sermon_excerpts → hybridSearchChunks(query)  FTS5 + vector, RRF-fused (top 15)
+                list_sermons           → resolveTranscriptSermons  COMPLETE roster
+                find_sermon            → findSermonsByTitle        named sermon + YouTube link
+            { type: 'context', sources }          cumulative citations
+            append tool_result blocks, continue
+        else → this turn is the answer: flush its buffered text as { type: 'delta' }, end loop
+          (the tool-forbidden final step streams its text live instead, since it can't be a preamble)
     → { type: 'done' }
-    → Claude answers grounded only in tool results
+    → answer is grounded only in tool results
 ```
 
 ## Data Flow: Transcripts

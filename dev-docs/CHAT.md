@@ -119,7 +119,7 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 | RRF fusion constant `k` | 60 (`RRF_K`) | `retrieval.ts` |
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
 | Sermons per `find_sermon` call | up to 10 | `router.ts` → `findSermonsByTitle(title, 10)` |
-| Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
+| Max agentic loop steps per turn | 6 | `router.ts` → `MAX_STEPS` (tools are withheld on the last step to force a final answer) |
 | Max tokens per Claude turn | 3072 | `router.ts` → `max_tokens: 3072` |
 | Chat rate limit | 30 req/min per IP | `router.ts` → `POST /api/chat` |
 | Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
