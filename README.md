@@ -19,9 +19,9 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 - **Web admin UI** — paste an MP3 URL, submit, watch the job complete
 - **Whisper transcription** — speech-to-text via the OpenAI Whisper API (`whisper-1`)
 - **Claude chunking** — sermon divided into named sections with timestamps, topics, and summaries
-- **FTS5 full-text search** — fast keyword search across all indexed content
+- **Hybrid retrieval** — chat excerpt search fuses FTS5 keyword ranking with semantic vector similarity (Reciprocal Rank Fusion), so answers scale with the library and handle paraphrased questions
 - **Transcripts page** — `/transcripts` finds sermons by date, theme, or keyword (natural-language or structured filters) and delivers viewable transcripts + on-demand PDF download
-- **Embeddings** — 384-dim vectors stored per chunk for future vector search
+- **Embeddings** — 384-dim per-chunk vectors (`all-MiniLM-L6-v2`) powering the semantic half of hybrid retrieval
 - **MCP server** — 4 read-only tools for church members to query via Claude Desktop
 - **In-process job queue** — sequential ingestion, non-blocking admin UI
 - **Duplicate detection** — same URL ingested twice is a no-op
@@ -281,6 +281,7 @@ What has Apostle Emmanuel Iren said about healing?
 | `MAX_AUDIO_DURATION_SECONDS` | No | `7200` | Duration cap (seconds) |
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
+| `BOOK_MODEL` | No | `CLAUDE_MODEL` | Claude model used to draft book chapters (falls back to `CLAUDE_MODEL`) |
 | `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream replication and dated archive exports |
 | `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication and dated archive exports |
 | `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key for Litestream replication and dated archive exports |
@@ -299,6 +300,8 @@ chunks         (id, sermon_id, section_name, content, timestamp_start, timestamp
 chunks_fts     — FTS5 virtual table, auto-synced via 3 triggers
 jobs           (id, title, download_url, payload, status, phase, message, error, created_at, started_at, completed_at)
 missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, theme, kind, reason, created_at, updated_at)
+books          (id, topic, title, status, sources, chapter_count, created_at)
+book_chapters  (id, book_id, idx, heading, body)
 ```
 
 `video_id` comes from the sermon API's `_id` field, or falls back to `SHA256(downloadUrl).slice(0, 16)` for manually-ingested URLs.
@@ -307,6 +310,32 @@ missing_sermons (id, video_id, title, date, download_url, webpage_url, speaker, 
 `ingestion_status` is `'transcribed'` while chunking is in progress, `'done'` once complete.
 `transcriptions` stores the full plain-text transcript and JSON segment array separately from `sermons` to keep sermon queries fast.
 `missing_sermons` holds sermons that failed to ingest, keyed by `video_id` so retries upsert and a successful ingest clears the row. `kind` classifies the failure (`no_audio` — `download_url` was just `AUDIO_BASE_URL` with no path; `too_long`; `timeout` — transient, retried on next sync; `error`). Server-restart failures are not recorded. Browse it under `/lyrical-theology`.
+`books` holds generated book drafts (`status`: `generating` → `done`/`failed`; `sources` is a JSON array of the sermons the draft was grounded in); `book_chapters` holds each book's chapters in order. See **Book generation** below.
+
+---
+
+## Book generation
+
+From the admin page, click **Generate a Book** (the `/admin/books` page) and enter a topic —
+e.g. "hope". The app assembles a book **entirely from the ministry's own sermons**, as a
+background job:
+
+1. **retrieving** — the complete roster of sermons *about* the topic is resolved (the same
+   relevance-density search the chat uses), and their chunks are pulled as grounding material.
+2. **outlining** — Claude designs a title and an ordered set of chapters, each tied to specific
+   sermon material (forced `emit_outline` tool call). The **number of chapters is right-sized to
+   the available sermon material** (a thin topic yields fewer; capped at 12).
+3. **drafting** — each chapter is written grounded in the relevant sermon excerpts, with inline
+   citations — never from general knowledge. Each chapter also gets the full plan and a recap of
+   the earlier chapters, so it **builds on them rather than repeating**. Chapters are saved as
+   they're written, so the book page shows live **N / M chapters** progress.
+4. **rendering** — the PDF is generated **on demand** at `GET /books/:id/download` (pdfkit, like
+   transcripts; Markdown lives in `books`/`book_chapters`).
+
+The job also appears in the admin jobs dashboard with its live phase. The model is `BOOK_MODEL`
+(defaults to `CLAUDE_MODEL`). Endpoints: `POST /api/admin/book-gen` (`{ topic }`, admin-only),
+`GET /api/admin/books` (admin-only, includes progress), `GET /books/:id/download` (public, once
+the book is `done`).
 
 ---
 

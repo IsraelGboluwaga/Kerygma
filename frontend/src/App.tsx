@@ -7,6 +7,7 @@ import ChatPage from './pages/ChatPage'
 import TranscriptsPage from './pages/TranscriptsPage'
 import TranscriptViewPage from './pages/TranscriptViewPage'
 import AdminPage from './pages/AdminPage'
+import BookGenPage from './pages/BookGenPage'
 import LiveStatusPage from './pages/LiveStatusPage'
 import DbBrowserPage from './pages/DbBrowserPage'
 import NotFoundPage from './pages/NotFoundPage'
@@ -21,6 +22,7 @@ export default function App() {
             <Route path="/transcripts" element={<TranscriptsPage />} />
             <Route path="/transcripts/:videoId" element={<TranscriptViewPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/admin/books" element={<BookGenPage />} />
             <Route path="/admin/live" element={<LiveStatusPage />} />
             <Route path="/lyrical-theology" element={<DbBrowserPage />} />
             <Route path="*" element={<NotFoundPage />} />

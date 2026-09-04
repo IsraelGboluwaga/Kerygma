@@ -38,7 +38,7 @@ MCP Client (Claude Desktop / any MCP-compatible app)
     │  HTTP POST /mcp
     ▼
 McpServer (4 read-only tools)
-    └── better-sqlite3 reads (FTS5 search + Claude synthesis)
+    └── better-sqlite3 reads (hybrid FTS5 + vector search + Claude synthesis)
 ```
 
 ---
@@ -101,7 +101,9 @@ Typed functions for every DB operation:
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
 - `getSpeakersMatchingFilter(filter)` → `string[]` — distinct speaker names matching substring
 - `getChunksBySermonId(id)` → `ChunkRow[]`
-- `searchChunks(query, limit, speaker?)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance. The optional `speaker` is matched (case-insensitive substring) inside the SQL query itself, before the `LIMIT`, so a speaker filter narrows the ranked set instead of discarding rows from an already-limited top-N sample
+- `searchChunks(query, limit, speaker?)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance. The optional `speaker` is matched (case-insensitive substring) inside the SQL query itself, before the `LIMIT`, so a speaker filter narrows the ranked set instead of discarding rows from an already-limited top-N sample. This is now the **lexical leg** of hybrid retrieval (`src/retrieval.ts`) as well as the FTS primitive used directly by tests
+- `getChunkEmbeddings(speaker?)` → `ChunkEmbeddingRow[]` — every stored chunk embedding (`id` + raw 384-dim Float32 blob) for the brute-force semantic scan; the optional `speaker` applies the same substring filter as `searchChunks` so the vector candidate set honours the same narrowing. Rows without an embedding are excluded
+- `getChunksByIds(ids)` → `ChunkWithSermon[]` — hydrates a set of chunk ids into full citation rows (same shape as `searchChunks`); used by `hybridSearchChunks` to fetch the rows that arrived via the vector path alone. Order is not preserved (caller reorders to the fused ranking)
 - `getSermonsBySpeaker(speaker)` → `SermonRow[]` — speaker/alias substring match done in SQL (not a broad fetch-then-filter-in-JS)
 - `getSermonIdsWithTranscription(sermonIds)` → `Set<number>` — batched `hasTranscript` existence check for a page of sermon rows (one query, not one per row)
 - `getTableColumns` / `getTableRowCount` / `getTableRows` / `DB_BROWSER_TABLES` — the DB browser's raw-SQL access, validated against the `DB_BROWSER_TABLES` allow-list (table names can't be bound as query params)
@@ -142,9 +144,46 @@ Exported as an async generator: `fetchAllSermons(): AsyncGenerator<IngestRequest
 - Exports `formatTimestamp` (used by router and MCP tools)
 
 ### `src/ingestion/embedder.ts`
-Loads `Xenova/all-MiniLM-L6-v2` once at startup (~90MB download on first run).
-`generateEmbedding(text)` returns a `Buffer` of raw Float32 bytes (384 floats = 1536 bytes).
-Stored in `chunks.embedding BLOB` for future vector search — not queried yet.
+Loads `Xenova/all-MiniLM-L6-v2` once at startup (~90MB download on first run). The
+`@xenova/transformers` version is **pinned** (exact, not `^`) so the model build — and
+therefore the vector space — can't drift under a reinstall; every chunk and every query must
+be embedded by the identical build or cosine comparisons between them are invalid.
+`generateEmbedding(text)` returns a `Buffer` of raw Float32 bytes (384 floats = 1536 bytes),
+L2-normalised (`normalize: true`) so cosine similarity reduces to a dot product. Stored in
+`chunks.embedding BLOB` and queried by the hybrid retrieval path (`src/retrieval.ts`): the same
+embedder embeds the incoming query, which is scored against these vectors.
+
+MiniLM truncates at ~256 word-pieces, so a long chunk's tail would never reach its vector.
+`generateEmbedding` avoids that: `splitIntoWindows` splits text over `EMBED_MAX_WORDS` (180)
+into overlapping windows (`EMBED_WINDOW_OVERLAP` = 20 words), each window is embedded, and the
+per-window unit vectors are mean-pooled and re-normalised into one unit vector — so the whole
+section is represented while the single-vector-per-chunk storage shape (and the retrieval scan)
+is unchanged. Short text and every chat query stay a single window, byte-identical to the
+previous single-pass behaviour. Only long chunks re-embedded on a future ingest gain the fuller
+vector; old and new vectors remain comparable (same model, both unit vectors), so no forced
+re-embed.
+
+### `src/retrieval.ts`
+Hybrid excerpt retrieval — the search path behind the chat's `search_sermon_excerpts`
+tool and the MCP `ask_church`/`search_teachings` tools. Fuses two candidate rankings:
+- **lexical** — `searchChunks` (FTS5 `MATCH ... ORDER BY rank`)
+- **semantic** — cosine similarity of the query embedding against every stored chunk vector
+
+Fusion is **Reciprocal Rank Fusion** (`score = Σ 1/(k + rank)`, `k = 60`), which combines by
+*rank* rather than raw score, so it never has to normalise BM25's rank metric against cosine
+similarity. `CANDIDATE_K = 50` candidates are pulled from each leg, fused, and truncated to the
+requested `limit` (`DEFAULT_RESULT_K = 15`, a reranked bump from the old fixed top-10).
+
+Vector search is a **brute-force in-process scan** — the simplest thing that holds at the current
+corpus size (one church's library, ~10³–10⁴ chunks): a linear dot-product scan over normalised
+384-d vectors is single-digit-to-tens-of-ms and needs no native ANN dependency or index to
+maintain, matching the single-singleton, no-pooling SQLite design. Scan time is logged (debug,
+escalating to warn past ~50 ms) so the crossover to `sqlite-vec`/an ANN index (~100k chunks) stays
+measurable. `hybridSearchChunks` degrades to FTS-only if the embedder is still warming up or the
+query embeds to a degenerate zero vector — chat keeps working during startup. Embedding blobs are
+length-validated and copied into an aligned buffer before decode (guards truncated rows and Node
+Buffer-pool misalignment). `getChunkEmbeddings`/`getChunksByIds`/`searchChunks` keep all SQL in
+`queries.ts`; the cosine + fusion math (not SQL) lives here.
 
 ### `src/ingestion/pipeline.ts`
 Orchestrates the full ingestion flow for one sermon:
@@ -195,7 +234,10 @@ the `jobs` DB table so history survives server restarts.
 - `getQueuePosition(id)` — 1-based position of a job still waiting in line, else null
 - `waitUntilIdle()` — used during graceful shutdown
 
-Job phases (`downloading` → `transcribing` → `chunking` → `embedding`) are reported by the ingestion pipeline through the `setPhase` callback, giving the status dashboard live sub-step visibility without adding log volume.
+Job phases are reported through the `setPhase` callback, giving the status dashboard live sub-step visibility without adding log volume. Ingestion uses `downloading → transcribing → chunking → embedding`; book generation uses `retrieving → outlining → drafting → rendering`.
+
+### `src/citations.ts`
+`formatSermonExcerpt`/`formatSermonExcerpts` — the shared `[title | ... | timestamp | URL]\ncontent` excerpt format (and its `EXCERPT_CONTENT_CAP` truncation length) used by both the MCP server's `buildContext()` and the chat's `search_sermon_excerpts` tool, so the citation format and cap live in one place instead of two independently-maintained copies.
 
 ### `src/citations.ts`
 `formatSermonExcerpt`/`formatSermonExcerpts` — the shared `[title | ... | timestamp | URL]\ncontent` excerpt format (and its `EXCERPT_CONTENT_CAP` truncation length) used by both the MCP server's `buildContext()` and the chat's `search_sermon_excerpts` tool, so the citation format and cap live in one place instead of two independently-maintained copies.
@@ -208,16 +250,17 @@ Registers 4 tools:
 3. `summarise_sermon(date, speaker?)` — full Claude-synthesised summary of a sermon; speaker disambiguation + nearest-date fallback
 4. `search_teachings(topic, speaker_filter?)` — topic search; speaker disambiguation built in
 
-Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`, `textResult`/`textContent` (build a `CallToolResult` from plain text). Once `speaker_filter` is resolved to a single canonical name (via `resolveSpeaker`/`getSpeakersMatchingFilter`), `ask_church` and `search_teachings` pass it straight into `searchChunks(query, limit, speaker)` so the DB filters before the row limit is applied, instead of fetching a fixed-size sample and discarding non-matching rows afterward.
+Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`, `textResult`/`textContent` (build a `CallToolResult` from plain text). Once `speaker_filter` is resolved to a single canonical name (via `resolveSpeaker`/`getSpeakersMatchingFilter`), `ask_church` (search branch) and `search_teachings` pass it straight into `hybridSearchChunks(query, { limit, speaker })` — the same hybrid (FTS5 + semantic vectors, RRF-fused) path the chat uses — so the speaker narrows both retrievers before the row limit is applied, instead of fetching a fixed-size sample and discarding non-matching rows afterward. The tools stay read-only (retrieval only reads).
 
 ### `frontend/` — React + Vite SPA
 The entire member- and admin-facing UI is a single-page React app (TypeScript + Tailwind, mobile-responsive) built by Vite. The backend no longer renders HTML — it exposes JSON/SSE APIs under `/api/*` (plus the PDF download) and serves the built SPA. Key files:
-- `frontend/src/App.tsx` — `react-router-dom` routes: `/` (chat), `/transcripts`, `/transcripts/:videoId`, `/admin`, `/admin/live`, `/lyrical-theology`, and a 404
+- `frontend/src/App.tsx` — `react-router-dom` routes: `/` (chat), `/transcripts`, `/transcripts/:videoId`, `/admin`, `/admin/books`, `/admin/live`, `/lyrical-theology`, and a 404
 - `frontend/src/api/client.ts` — typed fetch wrappers + the chat SSE reader (`streamChat`, an async generator yielding `delta`/`context`/`done`/`error` frames); `frontend/src/api/types.ts` mirrors the backend response shapes
 - `frontend/src/pages/ChatPage.tsx` — message thread, streaming assistant bubbles (markdown via `marked`, sanitized with `dompurify` before rendering), collapsible "Sources", auto-growing input
 - `frontend/src/pages/TranscriptsPage.tsx` — NL search box + structured filters (month/year/theme/speaker), responsive results table
 - `frontend/src/pages/TranscriptViewPage.tsx` — single transcript, timestamped segments or paragraph fallback, Download PDF link
-- `frontend/src/pages/AdminPage.tsx` — secret-gated stats + recent jobs, "Sync Now", 30 s auto-refresh
+- `frontend/src/pages/AdminPage.tsx` — secret-gated stats + recent jobs, "Sync Now", 30 s auto-refresh, and a link to the Generate-Book page
+- `frontend/src/pages/BookGenPage.tsx` — the Generate-Book page (`/admin/books`): topic form (`POST /api/admin/book-gen`) + a books table with a live progress column (`chaptersGenerated / chapterCount`) and Download-PDF links, polling every 5 s
 - `frontend/src/pages/LiveStatusPage.tsx` — phase stepper (Download → Transcribe → Chunk → Embed), queue + recent tables, polls every 2 s
 - `frontend/src/pages/DbBrowserPage.tsx` — secret-gated paginated table explorer (BLOBs shown as `[blob: NB]`)
 - `frontend/src/components/HamburgerIcon.tsx` — shared mobile-nav icon (used by `TopBar`, `ChatPage`, `TranscriptViewPage`)
@@ -231,6 +274,12 @@ The app is an installable **PWA**: `vite-plugin-pwa` generates `sw.js` + `manife
 ### `src/web/transcriptPdf.ts`
 `generateTranscriptPdf(sermon, transcript)` renders a transcript to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser; sub-second even for a 2-hour sermon). `transcriptPdfFilename(sermon)` builds the `theme__title__month-year.pdf` download name (theme falls back to `sermon`).
 
+### `src/book/generator.ts`
+`generateBook({ bookId, topic }, anthropic, ctx)` drafts a book from already-ingested sermon material as a background job. Phases: **retrieving** (the complete topic corpus via `searchSermonsByTopic` → `getSermonsByThemeName` → `findSermonsByTitle`, plus each sermon's chunks), **outlining** (a forced `emit_outline` tool call → title + ordered chapters, each pinned to sermon ids; the count is right-sized to the available material, capped at 12), **drafting** (one Claude call per chapter, grounded only in the relevant chunk text, with inline citations), **rendering** (mark the book `done`). After outlining it records `chapter_count` (`setBookChapterCount`) and then persists each chapter as it is drafted (`addBookChapter`) — not batched at the end — so the book page shows live `N / M` progress. The model is `BOOK_MODEL ?? CLAUDE_MODEL`; all calls go through `withRetry`. Returns a structured `{ status, message }` the queue maps to the job's terminal state, and marks the book row `failed` on any error (including an empty corpus). Each chapter draft is given **progressive context**: the full chapter plan plus a recap of the already-written chapters (their headings + foci — a compact running summary, not full prior prose) so chapters build on rather than repeat one another, at negligible token cost. The stable plan lives behind the `cache_control` breakpoint.
+
+### `src/web/bookPdf.ts`
+`generateBookPdf(book, chapters)` renders a generated book to a PDF `Buffer` with `pdfkit` (pure JS — no headless browser, like the transcript renderer): a title page, table of contents, each chapter, and a sources page listing the sermons the draft was grounded in. `bookPdfFilename(book)` builds the `book__title__month-year.pdf` download name. Served on demand at `GET /books/:id/download`, gated on `book.status === 'done'`.
+
 ### `src/web/transcriptQuery.ts`
 `parseTranscriptQuery(text, anthropic)` uses the cheap `CHUNKING_MODEL` (wrapped in `withRetry`) to extract structured `{ date?, topic?, speaker? }` filters from a free-text request. `topic` is the subject the sermon should be *about* (e.g. "faith"), resolved by relevance — not a formal theme name. Returns `{}` on any parse failure so the route can fall back to a raw keyword search.
 
@@ -241,22 +290,25 @@ Pure formatting helpers shared by the transcripts table, view, and PDF: `formatS
 Hono app wiring all routes. The UI pages are client-side routes served by the SPA catch-all; this layer is JSON/SSE + static serving only.
 
 **Chat**
-- `POST /api/chat` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given three read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`): `search_sermon_excerpts` (FTS5 chunk search, a relevant sample), `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any), and `find_sermon` (look up a named sermon's details, notably its YouTube link). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
+- `POST /api/chat` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given three read-only tools (`CHAT_TOOLS`, dispatched by the async `runChatTool`): `search_sermon_excerpts` (**hybrid** FTS5 + semantic-vector chunk search via `hybridSearchChunks`, a reranked relevant sample), `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any), and `find_sermon` (look up a named sermon's details, notably its YouTube link). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
 
 **Transcripts** — public, read-only transcript delivery
 - `GET /api/themes` — returns `{ id, name }[]` for the structured filter dropdown
 - `GET /api/transcripts/search` — accepts `q` (natural-language, parsed via `parseTranscriptQuery`) **or** structured `month`/`year`/`theme`/`topic`/`speaker` params; returns `{ interpreted, sermons[] }`. Filters combine (base set by priority topic > theme > date > speaker, then the rest applied as predicates). `topic` is a **relevance** search over each sermon's Claude-derived section topics/summaries (`searchSermonsByTopic`), ranked by density. Registered before `/api/transcripts/:videoId` so "search" isn't read as a video id
 - `GET /api/transcripts/:videoId` — returns `{ sermon, segments, transcript, hasTranscript }` (rendered client-side from `transcriptions.segments`, or paragraphs from the verbatim text)
 - `GET /transcripts/:videoId/download` — streams an on-demand PDF (`application/pdf`, `Content-Disposition: attachment`); the SPA links to it directly
+- `GET /books/:id/download` — streams a generated book's PDF on demand (404 if unknown, 409 until `status === 'done'`)
 
 **Admin** — protected by `X-Admin-Secret` middleware on `/api/admin/*`
 - `GET /api/admin/status` — returns `{ queueDepth, lastSyncAt, sermonCount }`
 - `POST /api/admin/sync-api` — triggers a background sync from the sermon REST API, returns `{ ok: true }` (202)
 - `GET /api/admin/jobs` — returns recent job list (up to 50)
 - `GET /api/admin/status/data` — returns `{ queueDepth, jobs }`; queued jobs include their 1-based `position`
+- `POST /api/admin/book-gen` — accepts `{ topic }`, creates the book row, enqueues a generation job, returns `{ jobId, bookId, downloadUrl }` (202)
+- `GET /api/admin/books` — returns recent generated books (id, topic, title, status, `chapterCount`, `chaptersGenerated`, createdAt, downloadUrl)
 
 **DB Browser** — protected by `X-Admin-Secret` middleware on `/api/db/*`
-- `GET /api/db/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, `jobs`, or `missing_sermons`; accepts `limit` and `offset` query params
+- `GET /api/db/:table` — returns paginated rows for `sermons`, `themes`, `transcriptions`, `chunks`, `jobs`, `missing_sermons`, `books`, or `book_chapters`; accepts `limit` and `offset` query params
 
 **Static + SPA**
 - `GET /favicon.ico`, `GET /assets/:file` — logos/icons from `public/assets`
@@ -281,17 +333,21 @@ Member opens browser → GET / → SPA shell (public/app/index.html) → ChatPag
 
 Member types question → POST /api/chat { messages: [...] }
     → 404 if countSermons() === 0
-    → agentic loop (≤6 steps), each step = anthropic.messages.stream(... CHAT_TOOLS):
-        stream { type: 'delta', text }            token by token
-        finalMessage → stop_reason !== 'tool_use'? end loop
-        else runChatTool() per tool_use block:
-            search_sermon_excerpts → searchChunks(query, 10)   relevant sample
-            list_sermons           → resolveTranscriptSermons  COMPLETE roster
-            find_sermon            → findSermonsByTitle        named sermon + YouTube link
-        { type: 'context', sources }              cumulative citations
-        append tool_result blocks, continue
+    → agentic loop (≤6 steps), each step = anthropic.messages.stream(...):
+        tools offered on every step EXCEPT the last (forces a final answer)
+        turn text is BUFFERED, not streamed — a turn that ends in a tool call
+          is a "let me search…" preamble and is discarded
+        finalMessage → stop_reason === 'tool_use'?
+            await runChatTool() per tool_use block:
+                search_sermon_excerpts → hybridSearchChunks(query)  FTS5 + vector, RRF-fused (top 15)
+                list_sermons           → resolveTranscriptSermons  COMPLETE roster
+                find_sermon            → findSermonsByTitle        named sermon + YouTube link
+            { type: 'context', sources }          cumulative citations
+            append tool_result blocks, continue
+        else → this turn is the answer: flush its buffered text as { type: 'delta' }, end loop
+          (the tool-forbidden final step streams its text live instead, since it can't be a preamble)
     → { type: 'done' }
-    → Claude answers grounded only in tool results
+    → answer is grounded only in tool results
 ```
 
 ## Data Flow: Transcripts
@@ -358,7 +414,7 @@ e.g. summarise_sermon("2024-03-12", "Apostle")
     → return narrative text
 
 e.g. ask_church("What was taught about faith?")
-    → searchChunks("What was...")        FTS5 query
+    → hybridSearchChunks("What was...")  FTS5 + semantic vectors, RRF-fused
     → Anthropic API                      answer with citations
     → return answer text
 ```
@@ -415,7 +471,7 @@ CREATE TABLE chunks (
     timestamp_end   REAL NOT NULL,
     topics          TEXT,               -- JSON array
     summary         TEXT,
-    embedding       BLOB                -- Float32[384], future vector search
+    embedding       BLOB                -- Float32[384], L2-normalised; queried by hybrid retrieval (cosine)
 );
 
 -- Full-text search (auto-synced via 3 triggers)
@@ -454,6 +510,26 @@ CREATE TABLE missing_sermons (
     reason       TEXT NOT NULL,
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Generated book drafts (one row per book); chapters in a separate table
+CREATE TABLE books (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic         TEXT NOT NULL,
+    title         TEXT,                              -- model-chosen, set during outlining
+    status        TEXT NOT NULL DEFAULT 'generating', -- generating | done | failed
+    sources       TEXT,                              -- JSON BookSource[] for the PDF sources page
+    chapter_count INTEGER,                           -- planned chapters, set after outlining (for progress)
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Chapters of a book, in order
+CREATE TABLE book_chapters (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER NOT NULL REFERENCES books(id),
+    idx     INTEGER NOT NULL,
+    heading TEXT NOT NULL,
+    body    TEXT NOT NULL
 );
 ```
 

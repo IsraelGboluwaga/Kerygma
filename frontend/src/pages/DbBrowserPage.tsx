@@ -5,7 +5,7 @@ import { useAdminSecret } from '../lib/useAdminSecret'
 import { useInterval } from '../lib/useInterval'
 import TopBar from '../components/TopBar'
 
-const TABLES = ['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons']
+const TABLES = ['sermons', 'themes', 'transcriptions', 'chunks', 'jobs', 'missing_sermons', 'books', 'book_chapters']
 const LIMIT = 50
 const AUTO_REFRESH_INTERVAL_MS = 5000
 

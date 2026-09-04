@@ -90,9 +90,9 @@ export interface ChunkRow {
   timestamp_end: number
   topics: string | null
   summary: string | null
-  // 384-dim Float32 vector, generated at ingest and stored so a future
-  // vector-search path can be added without re-embedding the library.
-  // FTS5 (searchChunks) is the only search path today — this isn't queried.
+  // 384-dim Float32 vector generated at ingest. Queried by the hybrid retrieval
+  // path (src/retrieval.ts): the query is embedded with the same model and
+  // scored against these vectors by cosine, then fused with the FTS ranking.
   embedding: Buffer | null
 }
 
@@ -410,6 +410,52 @@ export function searchChunks(query: string, limit = 10, speaker?: string): Chunk
   return stmt.all(...params) as ChunkWithSermon[]
 }
 
+// ── Hybrid retrieval (FTS5 + semantic vector) ────────────────────────────────
+// The excerpt search fuses two candidate lists: the lexical FTS ranking above
+// (searchChunks) and a semantic ranking computed in src/retrieval.ts by scoring
+// the query embedding against the stored per-chunk vectors. These two functions
+// supply the vector side (all embeddings for the brute-force scan) and hydrate a
+// fused id set back into full citation rows. The cosine/fusion math is NOT SQL,
+// so it lives in the retrieval module — only the row access lives here.
+
+export interface ChunkEmbeddingRow {
+  id: number
+  embedding: Buffer
+}
+
+// Every stored chunk embedding (id + raw 384-dim Float32 blob) for the
+// brute-force semantic scan. Optionally narrowed to a speaker so the vector
+// candidate set honours the same filter as the FTS candidate set. Rows without
+// an embedding (older ingests, or partials) are excluded.
+export function getChunkEmbeddings(speaker?: string): ChunkEmbeddingRow[] {
+  const speakerClause = speaker ? `AND LOWER(s.speaker) LIKE '%' || LOWER(?) || '%'` : ''
+  const stmt = getDb().prepare(
+    `SELECT c.id AS id, c.embedding AS embedding
+       FROM chunks c
+       JOIN sermons s ON s.id = c.sermon_id
+       WHERE c.embedding IS NOT NULL ${speakerClause}`
+  )
+  const rows = speaker ? stmt.all(speaker) : stmt.all()
+  return rows as ChunkEmbeddingRow[]
+}
+
+// Hydrate a set of chunk ids into full citation rows (same shape as
+// searchChunks). Order is NOT preserved — the caller reorders to the fused
+// ranking. Empty input short-circuits to avoid an invalid `IN ()`.
+export function getChunksByIds(ids: number[]): ChunkWithSermon[] {
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(',')
+  return getDb()
+    .prepare(
+      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker, t.name AS theme
+         FROM chunks c
+         JOIN sermons s ON s.id = c.sermon_id
+         LEFT JOIN themes t ON t.id = s.theme_id
+         WHERE c.id IN (${placeholders})`
+    )
+    .all(...ids) as ChunkWithSermon[]
+}
+
 export function listSermons(limit = 20): SermonRow[] {
   return getDb()
     .prepare(`${SERMON_SELECT} WHERE s.ingestion_status = 'done' ORDER BY s.date DESC LIMIT ?`)
@@ -647,6 +693,102 @@ export function listSpeakerAliases(): { alias: string; canonicalName: string }[]
   return rows.map((r) => ({ alias: r.alias, canonicalName: r.canonical_name }))
 }
 
+// ── Book drafts ──────────────────────────────────────────────────────────────
+
+export type BookStatus = 'generating' | 'done' | 'failed'
+
+export interface BookSource {
+  title: string
+  date: string
+  speaker: string | null
+}
+
+export interface BookRow {
+  id: number
+  topic: string
+  title: string | null
+  status: BookStatus
+  sources: string | null  // JSON-encoded BookSource[]
+  chapter_count: number | null  // planned chapters, set once the outline is known
+  created_at: string
+}
+
+export interface BookChapterRow {
+  id: number
+  book_id: number
+  idx: number
+  heading: string
+  body: string
+}
+
+export interface BookChapterInput {
+  idx: number
+  heading: string
+  body: string
+}
+
+/** Create a book row in the 'generating' state and return its id. */
+export function insertBook(topic: string): number {
+  const result = getDb()
+    .prepare(`INSERT INTO books (topic, status) VALUES (?, 'generating')`)
+    .run(topic)
+  return result.lastInsertRowid as number
+}
+
+/** Record the model-chosen title and the sermons the draft was grounded in. */
+export function setBookTitleAndSources(id: number, title: string, sources: BookSource[]): void {
+  getDb()
+    .prepare(`UPDATE books SET title = ?, sources = ? WHERE id = ?`)
+    .run(title, JSON.stringify(sources), id)
+}
+
+/** Record the planned chapter count (once the outline is known) for progress display. */
+export function setBookChapterCount(id: number, count: number): void {
+  getDb().prepare(`UPDATE books SET chapter_count = ? WHERE id = ?`).run(count, id)
+}
+
+/** Append a single chapter. Chapters are inserted as they are drafted so the
+ *  status view can show live progress (N of M chapters generated). */
+export function addBookChapter(bookId: number, chapter: BookChapterInput): void {
+  getDb()
+    .prepare(`INSERT INTO book_chapters (book_id, idx, heading, body) VALUES (?, ?, ?, ?)`)
+    .run(bookId, chapter.idx, chapter.heading, chapter.body)
+}
+
+/** Number of chapters drafted so far for a book. */
+export function getBookChapterCount(bookId: number): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS count FROM book_chapters WHERE book_id = ?`)
+    .get(bookId) as { count: number }
+  return row.count
+}
+
+export function markBookDone(id: number): void {
+  getDb().prepare(`UPDATE books SET status = 'done' WHERE id = ?`).run(id)
+}
+
+export function markBookFailed(id: number): void {
+  getDb().prepare(`UPDATE books SET status = 'failed' WHERE id = ?`).run(id)
+}
+
+export function getBook(id: number): BookRow | null {
+  return (
+    (getDb().prepare(`SELECT * FROM books WHERE id = ?`).get(id) as BookRow | undefined) ?? null
+  )
+}
+
+export function getBookChapters(bookId: number): BookChapterRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM book_chapters WHERE book_id = ? ORDER BY idx`)
+    .all(bookId) as BookChapterRow[]
+}
+
+export function listBooks(limit = 50): BookRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM books ORDER BY created_at DESC, id DESC LIMIT ?`)
+    .all(limit) as BookRow[]
+}
+
 // ── Admin DB browser ─────────────────────────────────────────────────────────
 // The one allow-list of tables the raw DB browser may read. Table names can't
 // be bound as query params, so every function here validates against this set
@@ -658,6 +800,8 @@ export const DB_BROWSER_TABLES = new Set([
   'chunks',
   'jobs',
   'missing_sermons',
+  'books',
+  'book_chapters',
 ])
 
 function assertBrowsableTable(table: string): void {

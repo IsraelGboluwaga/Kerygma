@@ -34,15 +34,17 @@ Three read-only tools, dispatched by `runChatTool()` in `src/web/router.ts`:
 
 | Tool | Backed by | Use for |
 |------|-----------|---------|
-| `search_sermon_excerpts` | `searchChunks()` (FTS5, top 10) | "What does X teach about Y" — returns a relevant **sample** of excerpts with citations |
+| `search_sermon_excerpts` | `hybridSearchChunks()` (FTS5 + semantic vectors, RRF-fused, top 15) | "What does X teach about Y" — returns a reranked relevant **sample** of excerpts with citations |
 | `list_sermons` | `resolveTranscriptSermons()` (date / topic / speaker) | "List/count sermons in month X / by speaker / about topic" — returns the **complete** matching roster |
 | `find_sermon` | `findSermonsByTitle()` (title `LIKE`, optional speaker/date) | "What's the YouTube link / video / recording for the sermon on X" — returns the named sermon's details including its **YouTube link** (`webpage_url`) |
 
-`search_sermon_excerpts` still uses `sanitizeFtsQuery()` under the hood (strips FTS5 special chars and stopwords, wraps tokens in `OR`). `list_sermons` resolves a `{date, topic, speaker}` filter to the full sermon list — by priority topic > theme > date > speaker, then applies the remaining filters as predicates (the same resolver the transcripts page uses). **This is the completeness guarantee:** a month query hits `getSermonsByDate('2023-03')` and returns every sermon in March, not whatever ranked in a keyword search.
+`search_sermon_excerpts` runs **hybrid retrieval** (`src/retrieval.ts` → `hybridSearchChunks`): it fuses a lexical FTS5 ranking (`searchChunks`, which still uses `sanitizeFtsQuery()` — strips FTS5 special chars and stopwords, wraps tokens in `OR`) with a **semantic** ranking, so paraphrased questions with no keyword overlap ("HANDS acronym to defend the deity of Christ") still find the right chunk. The semantic leg embeds the query with the **same** (version-pinned) embedder used at ingest (`generateEmbedding`, `Xenova/all-MiniLM-L6-v2`) and scores it by cosine against every stored `chunks.embedding` (L2-normalised, so cosine == dot product). Because MiniLM truncates at ~256 word-pieces, `generateEmbedding` embeds long chunks in overlapping word windows and mean-pools them into one vector, so a long section's tail is still represented; a short query is a single window. The two rankings are combined with **Reciprocal Rank Fusion** (`score = Σ 1/(60 + rank)`), which fuses by rank rather than raw score so BM25 and cosine never have to be normalised onto a common scale. `CANDIDATE_K = 50` candidates come from each leg; the fused list is truncated to `DEFAULT_RESULT_K = 15` — a reranked bump from the old fixed top-10, so coverage scales with the library instead of thinning as it grows. If the embedder is still warming up (it loads in the background at startup) or the query embeds to a zero vector, the semantic leg is skipped and the search degrades to FTS-only rather than erroring. The vector scan is a brute-force linear pass — deliberately the simplest thing that holds at the current corpus size (~10³–10⁴ chunks); scan time is logged so the crossover to an ANN index (`sqlite-vec`, ~100k chunks) stays measurable.
+
+`list_sermons` resolves a `{date, topic, speaker}` filter to the full sermon list — by priority topic > theme > date > speaker, then applies the remaining filters as predicates (the same resolver the transcripts page uses). **This is the completeness guarantee:** a month query hits `getSermonsByDate('2023-03')` and returns every sermon in March, not whatever ranked in a keyword search.
 
 `find_sermon` matches the requested text against the sermon **title** (case-insensitive substring), so a member can name a sermon and get its watch link without knowing the exact title. When the matched sermon has no `webpage_url` on file the result says `YouTube: (no link on file)` and the system prompt instructs Claude to say so plainly rather than invent a URL.
 
-All three tools' optional `speaker` filter resolves aliases the same way, via a shared `matchesSpeaker()` helper in `router.ts` (alias → canonical name via `resolveAliasToCanonical`, then a case-insensitive substring match) — this used to be reimplemented per tool and had drifted, so `find_sermon` silently skipped alias resolution. `search_sermon_excerpts` pushes the resolved speaker into the `searchChunks()` SQL query itself (rather than filtering the top-10 rows in JS afterward), so a speaker filter narrows the ranked set instead of shrinking a fixed-size sample.
+All three tools' optional `speaker` filter resolves aliases the same way, via a shared `matchesSpeaker()` helper in `router.ts` (alias → canonical name via `resolveAliasToCanonical`, then a case-insensitive substring match) — this used to be reimplemented per tool and had drifted, so `find_sermon` silently skipped alias resolution. `search_sermon_excerpts` pushes the resolved speaker into **both** retrieval legs (the `searchChunks()` FTS SQL and the `getChunkEmbeddings()` vector scan) rather than filtering the results in JS afterward, so a speaker filter narrows the ranked set instead of shrinking a fixed-size sample.
 
 The system prompt steers tool selection explicitly: use `list_sermons` (not excerpt search) for any list/count, treat its result as the authoritative complete set, and don't caveat with "these are only the ones in the excerpts I was given" — the exact failure mode that motivated this design. For a link/video request about a named sermon, it routes to `find_sermon`.
 
@@ -50,9 +52,10 @@ The system prompt steers tool selection explicitly: use `list_sermons` (not exce
 
 The backend uses SSE and runs a capped loop (max 6 steps) per turn. For each step it opens an `anthropic.messages.stream(...)` with the tools attached:
 
-- Text deltas stream to the client as `delta` events as they arrive.
-- After the turn, `finalMessage()` is inspected. If `stop_reason !== 'tool_use'`, the loop ends.
+- **Only the answer turn's text reaches the user.** A model turn that ends in a tool call usually opens with a "let me search…" preamble; that text is buffered and **discarded**, never streamed. Only a turn that ends *without* a tool call is the answer, and only its text is surfaced. This is deliberate: previously every turn's text was streamed and the frontend concatenated them, so the UI showed a pile of preambles ("Let me pull that up!Let me do a more targeted search!…") — and when the loop ran out of steps mid-search, a preamble with *no answer at all*.
+- After the turn, `finalMessage()` is inspected. If `stop_reason !== 'tool_use'`, that turn's buffered text is flushed as `delta` event(s) and the loop ends.
 - Otherwise each `tool_use` block is run through `runChatTool()`, citations are accumulated and emitted as a `context` event, the `tool_result` blocks are appended to the conversation, and the loop continues.
+- **The last permitted step withholds the tools** (this SDK predates `tool_choice: 'none'`, so the tools are simply not offered on that call). The model must then synthesise an answer from what it has, so the loop can never terminate on a dangling preamble. That final step streams its text live (it cannot be a preamble); earlier answer turns are flushed whole.
 
 **Prompt caching:** a single `cache_control` breakpoint sits on the system prompt, so the tools + system prefix (byte-identical across every call in the loop and across turns) is read at ~0.1× input cost on follow-up calls instead of re-paying full price. This absorbs most of the extra cost of the multi-call loop.
 
@@ -65,7 +68,7 @@ The backend emits these SSE event types:
 | Event | When | Payload |
 |-------|------|---------|
 | `context` | After a tool runs (cumulative sources so far) | `{ type: 'context', sources: [{title, date, timestamp?}] }` |
-| `delta` | As Claude streams tokens | `{ type: 'delta', text: '...' }` |
+| `delta` | The **answer** turn's text — pre-tool preambles are suppressed (see §4). The final step streams token-by-token; an earlier answer turn is flushed as a single `delta`. | `{ type: 'delta', text: '...' }` |
 | `done` | When the loop ends (terminal turn) | `{ type: 'done' }` |
 | `error` | On exception | `{ type: 'error', message: '...' }` |
 
@@ -83,8 +86,10 @@ Claude is called with:
 
 - On `context` — stores sources on the current assistant turn; the `<details>` attaches/refreshes even if it arrives before the answer text
 - On `delta` — the assistant bubble replaces the typing dots on the first token, then markdown (`marked`) re-renders incrementally as text accumulates
-- On `done` — the turn is marked complete and stays in state for future turns
+- On `done` — the turn is marked complete and stays in state for future turns. If the stream finished without producing any answer text, the empty bubble is replaced by an `EmptyAnswer` notice ("I couldn't find anything…") instead of rendering a blank bubble
 - On `error` — drops the empty assistant placeholder and shows an error banner
+
+While an answer is pending, the assistant bubble shows animated typing dots with a status label — `Searching the sermon library…` before any sources arrive, then `Reading the sermons…` once a `context` event has landed — so members always see that work is in progress rather than a silent empty bubble.
 
 Sources appear as a collapsible `<details>` element below the response bubble, showing sermon title, date, and (for excerpts) timestamp. The `section_name` from the chunk is not surfaced in the Sources widget — only the sermon-level metadata is shown.
 
@@ -94,7 +99,7 @@ Sources appear as a collapsible `<details>` element below the response bubble, s
 
 The entire conversation history is kept client-side and sent to the backend on every request. There is no server-side session. This means:
 
-- Conversations persist across page refreshes, tab closes, and browser restarts — `ConversationsContext` mirrors all conversations (and the active tab) to `localStorage` under the `kerygma_convos` key, so a returning member finds their chats waiting. Use the "New" button / `+` tab to start a fresh conversation; closing a tab removes that conversation from the saved state.
+- Conversations persist across page refreshes, tab closes, and browser restarts — `ConversationsContext` mirrors all conversations (and the active tab) to `localStorage` under the `kerygma_convos` key, so a returning member finds their chats waiting. Use the "New" button / `+` tab to start a fresh conversation; closing a tab removes that conversation from the saved state. The tab strip is ordered with the `+` button first, followed by conversations newest-first, so a freshly opened chat is always reachable without scrolling to the end of the strip.
 - Persistence is per-device/browser (no auth, no server-side session), and transient flags are sanitised on load: `busy`/`error` reset and any mid-stream `streaming` turn is finalised so a reload never restores a stuck "typing" bubble.
 - Claude can reference earlier exchanges in follow-up answers
 - Each turn independently re-runs the agentic loop and re-queries the DB, so answers always reflect the current library — and "that month/series" references resolve from the conversation before the tool call
@@ -111,15 +116,17 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 
 | Parameter | Value | Where set |
 |-----------|-------|-----------|
-| Chunks per `search_sermon_excerpts` call | 10 | `router.ts` → `searchChunks(query, 10)` |
+| Excerpts per `search_sermon_excerpts` call | 15 (`DEFAULT_RESULT_K`) | `retrieval.ts` → `hybridSearchChunks(query, { limit })` |
+| Candidates pulled per retrieval leg (FTS + vector) | 50 (`CANDIDATE_K`) | `retrieval.ts` |
+| RRF fusion constant `k` | 60 (`RRF_K`) | `retrieval.ts` |
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
 | Sermons per `find_sermon` call | up to 10 | `router.ts` → `findSermonsByTitle(title, 10)` |
-| Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
+| Max agentic loop steps per turn | 6 | `router.ts` → `MAX_STEPS` (tools are withheld on the last step to force a final answer) |
 | Max tokens per Claude turn | 3072 | `router.ts` → `max_tokens: 3072` |
 | Chat rate limit | 30 req/min per IP | `router.ts` → `POST /api/chat` |
 | Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
 
-Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because it groups results by sermon and presents them structured rather than as a synthesised narrative.
+Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 15) because it groups results by sermon and presents them structured rather than as a synthesised narrative. It uses the same `hybridSearchChunks` path.
 
 ---
 
@@ -130,7 +137,8 @@ Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because
 | `frontend/src/pages/ChatPage.tsx` | Chat UI, message rendering, streaming bubbles, sources `<details>` |
 | `frontend/src/api/client.ts` | `streamChat()` — SSE reader / async generator of chat events |
 | `src/web/router.ts` | `POST /api/chat` handler, agentic loop, `CHAT_TOOLS`, `runChatTool()` |
-| `src/db/queries.ts` | `searchChunks()`, `getSermonsByDate()`, `sanitizeFtsQuery()`, FTS5 query |
+| `src/retrieval.ts` | `hybridSearchChunks()` — FTS5 + semantic vector search fused with RRF (the `search_sermon_excerpts` backend, shared by MCP) |
+| `src/db/queries.ts` | `searchChunks()` (FTS5), `getChunkEmbeddings()`, `getChunksByIds()`, `getSermonsByDate()`, `sanitizeFtsQuery()` |
 | `src/ingestion/chunker.ts` | `formatTimestamp()` used in context headers |
 | `src/logger.ts` | Runtime logging (Winston) |
 | `src/config.ts` | `MINISTRY_NAME`, `CLAUDE_MODEL` |

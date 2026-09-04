@@ -1,6 +1,6 @@
 [build]
 builder = "DOCKERFILE"
-watchPatterns = ["src/**", "Dockerfile", "docker-entrypoint.sh", "litestream.yml", "package.json", "yarn.lock", "tsconfig.json", "railway.toml", "railway.json"]
+watchPatterns = ["src/**", "frontend/**", "scripts/**", "public/**", "Dockerfile", "docker-entrypoint.sh", "litestream.yml", "package.json", "yarn.lock", "tsconfig.json", "railway.toml", "railway.json"]
 
 [deploy]
 startCommand = "./docker-entrypoint.sh"

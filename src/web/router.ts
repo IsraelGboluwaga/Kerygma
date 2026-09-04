@@ -8,7 +8,6 @@ import { config } from '../config.js'
 import { getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
 import { syncFromApi } from '../scheduler.js'
 import {
-  searchChunks,
   getConfig,
   countSermons,
   listThemes,
@@ -23,6 +22,11 @@ import {
   getTranscriptionBySermonId,
   getSermonIdsWithTranscription,
   resolveAliasToCanonical,
+  insertBook,
+  getBook,
+  getBookChapters,
+  getBookChapterCount,
+  listBooks,
   DB_BROWSER_TABLES,
   getTableColumns,
   getTableRowCount,
@@ -32,8 +36,12 @@ import {
 import type { TranscriptSegment } from '../ingestion/transcriber.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { formatSermonExcerpts } from '../citations.js'
+import { hybridSearchChunks, DEFAULT_RESULT_K } from '../retrieval.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
+import { enqueue } from '../queue.js'
+import { generateBook } from '../book/generator.js'
+import { generateBookPdf, bookPdfFilename } from './bookPdf.js'
 import { generateTranscriptPdf, transcriptPdfFilename } from './transcriptPdf.js'
 import { parseTranscriptQuery, type TranscriptQuery } from './transcriptQuery.js'
 import { formatSermonDate, humanizeDatePrefix } from './transcriptFormat.js'
@@ -217,11 +225,12 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
   },
 ]
 
-function searchExcerptsTool(query: string, speaker?: string): ChatToolResult {
-  // Filter by speaker in the query itself (not after the top-10 limit) so a
-  // speaker filter narrows the ranked set instead of shrinking it.
+async function searchExcerptsTool(query: string, speaker?: string): Promise<ChatToolResult> {
+  // Hybrid retrieval (FTS5 + semantic vectors, RRF-fused) so excerpt coverage
+  // scales with the library and paraphrased questions still match. The speaker
+  // filter is resolved to canonical here and applied to both retrievers.
   const resolvedSpeaker = speaker ? resolveAliasToCanonical(speaker) ?? speaker : undefined
-  const chunks = searchChunks(query, 10, resolvedSpeaker)
+  const chunks = await hybridSearchChunks(query, { limit: DEFAULT_RESULT_K, speaker: resolvedSpeaker })
   if (chunks.length === 0) {
     return { text: `No sermon excerpts found for "${query}".`, sources: [] }
   }
@@ -278,7 +287,7 @@ function findSermonTool(title: string, speaker?: string, date?: string): ChatToo
   return { text: `${rows.length} sermon(s) matched:\n${body}`, sources }
 }
 
-export function runChatTool(name: string, input: unknown): ChatToolResult {
+export async function runChatTool(name: string, input: unknown): Promise<ChatToolResult> {
   const args = (input ?? {}) as Record<string, unknown>
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined
@@ -350,12 +359,14 @@ export function createRouter(anthropic: Anthropic): Hono {
     const systemPrompt = [
       `You are a sermon assistant for ${config.MINISTRY_NAME}.`,
       'You have read-only tools to look up the sermon library. Ground every answer about sermons in a tool result — never answer sermon questions from general knowledge.',
-      '- For questions about what was taught on a topic, use search_sermon_excerpts and cite the title, speaker, date, and timestamp.',
-      '- For questions that ask for a list or count of sermons — by month, date, speaker, or topic — use list_sermons. Its result is the COMPLETE, authoritative set for that filter. Present the full list and do NOT add disclaimers like "these are only the ones in the excerpts I was given".',
+      '- For questions about what was taught on a topic, use search_sermon_excerpts. This is your primary evidence tool: quote the sermon\'s own words, and for every claim cite the title, speaker, date, and timestamp from the result. Prefer verbatim quotes over paraphrase, and never state what a sermon taught without an excerpt to back it.',
+      '- For questions that ask for a list or count of sermons — by month, date, speaker, or topic — use list_sermons. Its result is the COMPLETE, authoritative set for that filter. Present the full list and do NOT add disclaimers like "these are only the ones in the excerpts I was given". list_sermons is for enumeration only — do NOT treat its titles as evidence of what was taught; confirm content with search_sermon_excerpts before describing a sermon\'s teaching.',
       '- Do not enumerate sermons from search_sermon_excerpts results; that tool returns a relevant sample and will miss sermons.',
       '- For the YouTube/video link, recording, or "where can I watch" of a specific named sermon, use find_sermon and share the YouTube link from the result. If the matched sermon has no link on file, say so plainly rather than inventing one.',
       '- When the user asks "did X teach on [Y]" or "is there a sermon on [Y]", Y may be a sermon title rather than a content topic. Call find_sermon with Y as the title to check — a sermon can be titled "Drive" even if the word barely appears in the transcript.',
+      '- If a search returns nothing useful, try one alternative phrasing, then answer honestly that the library does not appear to cover it — do not pad the answer with unrelated sermons.',
       'When the user refers to "that month", "that series", or a previous result, resolve it from the conversation, then call the tool with the concrete value.',
+      'Answer directly. Do NOT narrate your tool use to the user with phrases like "let me search", "let me pull that up", or "one moment" — the user only sees your final answer, so lead with it.',
       'If the user sends a greeting or makes small talk, welcome them warmly as a sermon assistant and invite them to ask about the sermons — do not call any tool.',
     ].join('\n')
 
@@ -371,10 +382,27 @@ export function createRouter(anthropic: Anthropic): Hono {
         if (!seen.has(key)) { seen.add(key); collected.push(src) }
       }
 
+      const sendDelta = async (text: string): Promise<void> => {
+        await s.write(`data: ${JSON.stringify({ type: 'delta', text })}\n\n`)
+      }
+
       try {
-        // Agentic loop: stream each turn's text; if the turn requests tools,
-        // run them, feed the results back, and continue. Capped to avoid loops.
-        for (let step = 0; step < 6; step++) {
+        // Agentic loop: the model may take several tool-use turns before it
+        // answers. Only ONE turn — the one that ends without a tool call — is
+        // the answer the user should see. The text a model emits alongside a
+        // tool call is a "let me search…" preamble, so we buffer each turn's
+        // text and surface it only when that turn turns out to be the answer.
+        // This is why the UI used to show concatenated preambles (or, when the
+        // loop ran out of steps mid-search, only a preamble and no answer).
+        const MAX_STEPS = 6
+        for (let step = 0; step < MAX_STEPS; step++) {
+          // On the final permitted step, withhold the tools so the model must
+          // synthesise an answer from what it already has instead of emitting
+          // yet another preamble + tool_use that we'd drop on exit. This
+          // guarantees the loop always ends on a real answer, never a dangling
+          // "let me pull that up". (This SDK predates tool_choice:'none', so we
+          // achieve the same by not offering the tools on that call.)
+          const finalStep = step === MAX_STEPS - 1
           const msgStream = anthropic.messages.stream({
             model: config.CLAUDE_MODEL,
             // Headroom for a full list_sermons roster (up to 100 rows) so a
@@ -384,34 +412,45 @@ export function createRouter(anthropic: Anthropic): Hono {
             // tools+system prefix, so the follow-up call(s) in the loop read it
             // at ~0.1x instead of re-paying full input price.
             system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
-            tools: CHAT_TOOLS,
+            ...(finalStep ? {} : { tools: CHAT_TOOLS }),
             messages: convo,
           })
 
+          // Buffer this turn's text. The tool-forbidden final step can never be
+          // a preamble, so we can safely stream it live for a responsive feel;
+          // any earlier turn is flushed only once we know it's the answer.
+          let turnText = ''
           for await (const event of msgStream) {
             if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-              await s.write(`data: ${JSON.stringify({ type: 'delta', text: event.delta.text })}\n\n`)
+              turnText += event.delta.text
+              if (finalStep) await sendDelta(event.delta.text)
             }
           }
 
           const final = await msgStream.finalMessage()
           convo.push({ role: 'assistant', content: final.content })
 
-          if (final.stop_reason !== 'tool_use') break
+          if (final.stop_reason === 'tool_use') {
+            const toolResults: Anthropic.ToolResultBlockParam[] = []
+            for (const block of final.content) {
+              if (block.type !== 'tool_use') continue
+              const result = await runChatTool(block.name, block.input)
+              result.sources.forEach(addSource)
+              toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result.text })
+            }
 
-          const toolResults: Anthropic.ToolResultBlockParam[] = []
-          for (const block of final.content) {
-            if (block.type !== 'tool_use') continue
-            const result = runChatTool(block.name, block.input)
-            result.sources.forEach(addSource)
-            toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result.text })
+            // Surface citations as they're discovered, before the answer.
+            if (collected.length > 0) {
+              await s.write(`data: ${JSON.stringify({ type: 'context', sources: collected })}\n\n`)
+            }
+            convo.push({ role: 'user', content: toolResults })
+            continue
           }
 
-          // Surface citations as they're discovered, before the answer streams.
-          if (collected.length > 0) {
-            await s.write(`data: ${JSON.stringify({ type: 'context', sources: collected })}\n\n`)
-          }
-          convo.push({ role: 'user', content: toolResults })
+          // No tool call → this turn is the answer. If it wasn't streamed live
+          // above (i.e. not the tool-forbidden step), surface it now.
+          if (!finalStep && turnText) await sendDelta(turnText)
+          break
         }
 
         await s.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
@@ -525,6 +564,34 @@ export function createRouter(anthropic: Anthropic): Hono {
     }
   })
 
+  // ── Books ─────────────────────────────────────────────────────────────────
+  // On-demand PDF of a generated book draft — rendered per request from the
+  // stored chapters (Markdown lives in SQLite, which Litestream replicates; a
+  // PDF written to the ephemeral container's disk would not survive a restart).
+  app.get('/books/:id/download', async (c) => {
+    const id = parseInt(c.req.param('id'), 10)
+    if (!Number.isInteger(id)) return c.json({ error: 'Invalid book id' }, 400)
+
+    const book = getBook(id)
+    if (!book) return c.notFound()
+    if (book.status !== 'done') {
+      return c.json({ error: `Book is not ready (status: ${book.status})` }, 409)
+    }
+
+    try {
+      const pdf = await generateBookPdf(book, getBookChapters(id))
+      return new Response(new Uint8Array(pdf), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${bookPdfFilename(book)}"`,
+        },
+      })
+    } catch (err) {
+      logger.error(`Book PDF error: ${errMsg(err)}`)
+      return c.json({ error: 'Failed to generate PDF' }, 500)
+    }
+  })
+
   // ── Admin auth middleware ───────────────────────────────────────────────
   const adminMiddleware = async (
     c: Parameters<Parameters<Hono['use']>[1]>[0],
@@ -558,6 +625,50 @@ export function createRouter(anthropic: Anthropic): Hono {
   app.post('/api/admin/sync-api', async (c) => {
     void syncFromApi(anthropic)
     return c.json({ ok: true, message: 'API sync started in background' }, 202)
+  })
+
+  // Kick off a book draft on a topic. Creates the book row up-front (so its
+  // download URL is known immediately) and runs generation as a background job,
+  // which appears in the jobs dashboard like any other.
+  app.post('/api/admin/book-gen', async (c) => {
+    let body: { topic?: unknown }
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: 'Invalid JSON body' }, 400)
+    }
+    const topic = typeof body.topic === 'string' ? body.topic.trim() : ''
+    if (!topic) return c.json({ error: 'A non-empty "topic" is required' }, 400)
+
+    if (countSermons() === 0) {
+      return c.json({ error: 'No sermons indexed yet — ingest some first.' }, 404)
+    }
+
+    const bookId = insertBook(topic)
+    const downloadUrl = `/books/${bookId}/download`
+    const jobId = enqueue((ctx) => generateBook({ bookId, topic }, anthropic, ctx), {
+      title: `Book: ${topic}`,
+      downloadUrl,
+      payload: JSON.stringify({ bookId, topic }),
+    })
+    return c.json({ jobId, bookId, downloadUrl }, 202)
+  })
+
+  // List generated books (newest first) for the admin UI. `chaptersGenerated`
+  // vs `chapterCount` drives the live progress column on the book page.
+  app.get('/api/admin/books', (c) => {
+    return c.json(
+      listBooks(50).map((b) => ({
+        id: b.id,
+        topic: b.topic,
+        title: b.title,
+        status: b.status,
+        chapterCount: b.chapter_count,
+        chaptersGenerated: getBookChapterCount(b.id),
+        createdAt: b.created_at,
+        downloadUrl: `/books/${b.id}/download`,
+      }))
+    )
   })
 
   // Snapshot for the live status dashboard: recent jobs (queued ones carry
