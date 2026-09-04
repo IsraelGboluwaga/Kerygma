@@ -34,7 +34,7 @@ function sermon(overrides: Partial<SaveSermonInput> = {}): SaveSermonInput {
 }
 
 describe('runChatTool — list_sermons', () => {
-  it('returns the COMPLETE roster for a month, even sermons no keyword search would surface', () => {
+  it('returns the COMPLETE roster for a month, even sermons no keyword search would surface', async () => {
     // The reported bug: enumerating a month via relevance search missed sermons.
     // list_sermons must return every sermon in the period regardless of content.
     saveSermon(sermon({ title: 'Solid Roots, Solid Fruits', date: '2023-03-01' }))
@@ -43,7 +43,7 @@ describe('runChatTool — list_sermons', () => {
     saveSermon(sermon({ title: 'Ideologies', date: '2023-03-26' }))
     saveSermon(sermon({ title: 'February Sermon', date: '2023-02-10' }))
 
-    const { text } = runChatTool('list_sermons', { date: '2023-03' })
+    const { text } = await runChatTool('list_sermons', { date: '2023-03' })
 
     expect(text).toContain('Solid Roots, Solid Fruits')
     expect(text).toContain('Lamp & Light')
@@ -53,26 +53,26 @@ describe('runChatTool — list_sermons', () => {
     expect(text).toContain('4 sermon(s) matched')
   })
 
-  it('reports sources for every matched sermon', () => {
+  it('reports sources for every matched sermon', async () => {
     saveSermon(sermon({ title: 'A', date: '2023-03-01' }))
     saveSermon(sermon({ title: 'B', date: '2023-03-02' }))
 
-    const { sources } = runChatTool('list_sermons', { date: '2023-03' })
+    const { sources } = await runChatTool('list_sermons', { date: '2023-03' })
     expect(sources.map((s) => s.title).sort()).toEqual(['A', 'B'])
   })
 
-  it('filters by speaker', () => {
+  it('filters by speaker', async () => {
     saveSermon(sermon({ title: 'By Laju', date: '2023-03-01', speaker: 'Pst. Laju Iren' }))
     saveSermon(sermon({ title: 'By Other', date: '2023-03-02', speaker: 'Someone Else' }))
 
-    const { text } = runChatTool('list_sermons', { speaker: 'Laju' })
+    const { text } = await runChatTool('list_sermons', { speaker: 'Laju' })
     expect(text).toContain('By Laju')
     expect(text).not.toContain('By Other')
   })
 })
 
 describe('runChatTool — find_sermon', () => {
-  it('returns the YouTube link for a sermon matched by title', () => {
+  it('returns the YouTube link for a sermon matched by title', async () => {
     saveSermon(
       sermon({
         title: 'The Prodigal Son',
@@ -83,22 +83,22 @@ describe('runChatTool — find_sermon', () => {
     )
     saveSermon(sermon({ title: 'Something Else', date: '2023-04-09' }))
 
-    const { text, sources } = runChatTool('find_sermon', { title: 'prodigal' })
+    const { text, sources } = await runChatTool('find_sermon', { title: 'prodigal' })
     expect(text).toContain('The Prodigal Son')
     expect(text).toContain('YouTube: https://youtube.com/watch?v=abc123')
     expect(text).not.toContain('Something Else')
     expect(sources[0]).toMatchObject({ title: 'The Prodigal Son', date: '2023-04-02' })
   })
 
-  it('says so when the matched sermon has no link on file', () => {
+  it('says so when the matched sermon has no link on file', async () => {
     saveSermon(sermon({ title: 'No Link Sermon', date: '2023-05-01' }))
 
-    const { text } = runChatTool('find_sermon', { title: 'No Link' })
+    const { text } = await runChatTool('find_sermon', { title: 'No Link' })
     expect(text).toContain('No Link Sermon')
     expect(text).toContain('YouTube: (no link on file)')
   })
 
-  it('narrows by speaker', () => {
+  it('narrows by speaker', async () => {
     saveSermon(
       sermon({ title: 'Grace', date: '2023-06-01', speaker: 'Pst. Laju Iren', webpage_url: 'https://youtu.be/laju' })
     )
@@ -106,12 +106,12 @@ describe('runChatTool — find_sermon', () => {
       sermon({ title: 'Grace', date: '2023-06-08', speaker: 'Someone Else', webpage_url: 'https://youtu.be/other' })
     )
 
-    const { text } = runChatTool('find_sermon', { title: 'grace', speaker: 'Laju' })
+    const { text } = await runChatTool('find_sermon', { title: 'grace', speaker: 'Laju' })
     expect(text).toContain('https://youtu.be/laju')
     expect(text).not.toContain('https://youtu.be/other')
   })
 
-  it('resolves a speaker alias the same way list_sermons does (regression: find_sermon used to skip alias resolution)', () => {
+  it('resolves a speaker alias the same way list_sermons does (regression: find_sermon used to skip alias resolution)', async () => {
     upsertSpeakerAlias('the apostle', 'Pst. Laju Iren')
     saveSermon(
       sermon({ title: 'Grace', date: '2023-06-01', speaker: 'Pst. Laju Iren', webpage_url: 'https://youtu.be/laju' })
@@ -120,22 +120,22 @@ describe('runChatTool — find_sermon', () => {
       sermon({ title: 'Grace', date: '2023-06-08', speaker: 'Someone Else', webpage_url: 'https://youtu.be/other' })
     )
 
-    const { text } = runChatTool('find_sermon', { title: 'grace', speaker: 'the apostle' })
+    const { text } = await runChatTool('find_sermon', { title: 'grace', speaker: 'the apostle' })
     expect(text).toContain('https://youtu.be/laju')
     expect(text).not.toContain('https://youtu.be/other')
   })
 
-  it('reports no match when the title is unknown', () => {
+  it('reports no match when the title is unknown', async () => {
     saveSermon(sermon({ title: 'Faith', date: '2023-07-01' }))
 
-    const { text, sources } = runChatTool('find_sermon', { title: 'nonexistent topic' })
+    const { text, sources } = await runChatTool('find_sermon', { title: 'nonexistent topic' })
     expect(text).toContain('No sermon found')
     expect(sources).toHaveLength(0)
   })
 })
 
 describe('runChatTool — search_sermon_excerpts', () => {
-  it('returns relevant excerpts with citations', () => {
+  it('returns relevant excerpts with citations', async () => {
     const id = saveSermon(sermon({ title: 'On Faith', date: '2023-03-01' }))
     saveChunks(id, [
       {
@@ -146,7 +146,7 @@ describe('runChatTool — search_sermon_excerpts', () => {
       },
     ])
 
-    const { text, sources } = runChatTool('search_sermon_excerpts', { query: 'faith' })
+    const { text, sources } = await runChatTool('search_sermon_excerpts', { query: 'faith' })
     expect(text).toContain('On Faith')
     expect(sources[0]).toMatchObject({ title: 'On Faith', date: '2023-03-01' })
   })

@@ -90,9 +90,9 @@ export interface ChunkRow {
   timestamp_end: number
   topics: string | null
   summary: string | null
-  // 384-dim Float32 vector, generated at ingest and stored so a future
-  // vector-search path can be added without re-embedding the library.
-  // FTS5 (searchChunks) is the only search path today — this isn't queried.
+  // 384-dim Float32 vector generated at ingest. Queried by the hybrid retrieval
+  // path (src/retrieval.ts): the query is embedded with the same model and
+  // scored against these vectors by cosine, then fused with the FTS ranking.
   embedding: Buffer | null
 }
 
@@ -408,6 +408,52 @@ export function searchChunks(query: string, limit = 10, speaker?: string): Chunk
   )
   const params = speaker ? [sanitizeFtsQuery(query), speaker, limit] : [sanitizeFtsQuery(query), limit]
   return stmt.all(...params) as ChunkWithSermon[]
+}
+
+// ── Hybrid retrieval (FTS5 + semantic vector) ────────────────────────────────
+// The excerpt search fuses two candidate lists: the lexical FTS ranking above
+// (searchChunks) and a semantic ranking computed in src/retrieval.ts by scoring
+// the query embedding against the stored per-chunk vectors. These two functions
+// supply the vector side (all embeddings for the brute-force scan) and hydrate a
+// fused id set back into full citation rows. The cosine/fusion math is NOT SQL,
+// so it lives in the retrieval module — only the row access lives here.
+
+export interface ChunkEmbeddingRow {
+  id: number
+  embedding: Buffer
+}
+
+// Every stored chunk embedding (id + raw 384-dim Float32 blob) for the
+// brute-force semantic scan. Optionally narrowed to a speaker so the vector
+// candidate set honours the same filter as the FTS candidate set. Rows without
+// an embedding (older ingests, or partials) are excluded.
+export function getChunkEmbeddings(speaker?: string): ChunkEmbeddingRow[] {
+  const speakerClause = speaker ? `AND LOWER(s.speaker) LIKE '%' || LOWER(?) || '%'` : ''
+  const stmt = getDb().prepare(
+    `SELECT c.id AS id, c.embedding AS embedding
+       FROM chunks c
+       JOIN sermons s ON s.id = c.sermon_id
+       WHERE c.embedding IS NOT NULL ${speakerClause}`
+  )
+  const rows = speaker ? stmt.all(speaker) : stmt.all()
+  return rows as ChunkEmbeddingRow[]
+}
+
+// Hydrate a set of chunk ids into full citation rows (same shape as
+// searchChunks). Order is NOT preserved — the caller reorders to the fused
+// ranking. Empty input short-circuits to avoid an invalid `IN ()`.
+export function getChunksByIds(ids: number[]): ChunkWithSermon[] {
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(',')
+  return getDb()
+    .prepare(
+      `SELECT c.*, s.title AS sermon_title, s.date, s.download_url, s.webpage_url, s.speaker, t.name AS theme
+         FROM chunks c
+         JOIN sermons s ON s.id = c.sermon_id
+         LEFT JOIN themes t ON t.id = s.theme_id
+         WHERE c.id IN (${placeholders})`
+    )
+    .all(...ids) as ChunkWithSermon[]
 }
 
 export function listSermons(limit = 20): SermonRow[] {

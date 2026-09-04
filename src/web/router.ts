@@ -8,7 +8,6 @@ import { config } from '../config.js'
 import { getRecentJobs, getQueueDepth, getQueuePosition } from '../queue.js'
 import { syncFromApi } from '../scheduler.js'
 import {
-  searchChunks,
   getConfig,
   countSermons,
   listThemes,
@@ -37,6 +36,7 @@ import {
 import type { TranscriptSegment } from '../ingestion/transcriber.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { formatSermonExcerpts } from '../citations.js'
+import { hybridSearchChunks, DEFAULT_RESULT_K } from '../retrieval.js'
 import { errMsg } from '../utils.js'
 import { logger } from '../logger.js'
 import { enqueue } from '../queue.js'
@@ -225,11 +225,12 @@ const CHAT_TOOLS: Anthropic.Tool[] = [
   },
 ]
 
-function searchExcerptsTool(query: string, speaker?: string): ChatToolResult {
-  // Filter by speaker in the query itself (not after the top-10 limit) so a
-  // speaker filter narrows the ranked set instead of shrinking it.
+async function searchExcerptsTool(query: string, speaker?: string): Promise<ChatToolResult> {
+  // Hybrid retrieval (FTS5 + semantic vectors, RRF-fused) so excerpt coverage
+  // scales with the library and paraphrased questions still match. The speaker
+  // filter is resolved to canonical here and applied to both retrievers.
   const resolvedSpeaker = speaker ? resolveAliasToCanonical(speaker) ?? speaker : undefined
-  const chunks = searchChunks(query, 10, resolvedSpeaker)
+  const chunks = await hybridSearchChunks(query, { limit: DEFAULT_RESULT_K, speaker: resolvedSpeaker })
   if (chunks.length === 0) {
     return { text: `No sermon excerpts found for "${query}".`, sources: [] }
   }
@@ -286,7 +287,7 @@ function findSermonTool(title: string, speaker?: string, date?: string): ChatToo
   return { text: `${rows.length} sermon(s) matched:\n${body}`, sources }
 }
 
-export function runChatTool(name: string, input: unknown): ChatToolResult {
+export async function runChatTool(name: string, input: unknown): Promise<ChatToolResult> {
   const args = (input ?? {}) as Record<string, unknown>
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined
@@ -433,7 +434,7 @@ export function createRouter(anthropic: Anthropic): Hono {
             const toolResults: Anthropic.ToolResultBlockParam[] = []
             for (const block of final.content) {
               if (block.type !== 'tool_use') continue
-              const result = runChatTool(block.name, block.input)
+              const result = await runChatTool(block.name, block.input)
               result.sources.forEach(addSource)
               toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result.text })
             }
