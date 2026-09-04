@@ -50,9 +50,10 @@ The system prompt steers tool selection explicitly: use `list_sermons` (not exce
 
 The backend uses SSE and runs a capped loop (max 6 steps) per turn. For each step it opens an `anthropic.messages.stream(...)` with the tools attached:
 
-- Text deltas stream to the client as `delta` events as they arrive.
-- After the turn, `finalMessage()` is inspected. If `stop_reason !== 'tool_use'`, the loop ends.
+- **Only the answer turn's text reaches the user.** A model turn that ends in a tool call usually opens with a "let me search…" preamble; that text is buffered and **discarded**, never streamed. Only a turn that ends *without* a tool call is the answer, and only its text is surfaced. This is deliberate: previously every turn's text was streamed and the frontend concatenated them, so the UI showed a pile of preambles ("Let me pull that up!Let me do a more targeted search!…") — and when the loop ran out of steps mid-search, a preamble with *no answer at all*.
+- After the turn, `finalMessage()` is inspected. If `stop_reason !== 'tool_use'`, that turn's buffered text is flushed as `delta` event(s) and the loop ends.
 - Otherwise each `tool_use` block is run through `runChatTool()`, citations are accumulated and emitted as a `context` event, the `tool_result` blocks are appended to the conversation, and the loop continues.
+- **The last permitted step withholds the tools** (this SDK predates `tool_choice: 'none'`, so the tools are simply not offered on that call). The model must then synthesise an answer from what it has, so the loop can never terminate on a dangling preamble. That final step streams its text live (it cannot be a preamble); earlier answer turns are flushed whole.
 
 **Prompt caching:** a single `cache_control` breakpoint sits on the system prompt, so the tools + system prefix (byte-identical across every call in the loop and across turns) is read at ~0.1× input cost on follow-up calls instead of re-paying full price. This absorbs most of the extra cost of the multi-call loop.
 
@@ -65,7 +66,7 @@ The backend emits these SSE event types:
 | Event | When | Payload |
 |-------|------|---------|
 | `context` | After a tool runs (cumulative sources so far) | `{ type: 'context', sources: [{title, date, timestamp?}] }` |
-| `delta` | As Claude streams tokens | `{ type: 'delta', text: '...' }` |
+| `delta` | The **answer** turn's text — pre-tool preambles are suppressed (see §4). The final step streams token-by-token; an earlier answer turn is flushed as a single `delta`. | `{ type: 'delta', text: '...' }` |
 | `done` | When the loop ends (terminal turn) | `{ type: 'done' }` |
 | `error` | On exception | `{ type: 'error', message: '...' }` |
 
