@@ -19,9 +19,9 @@ Kerygma lets church administrators paste an MP3 URL into a web form. The server 
 - **Web admin UI** — paste an MP3 URL, submit, watch the job complete
 - **Whisper transcription** — speech-to-text via the OpenAI Whisper API (`whisper-1`)
 - **Claude chunking** — sermon divided into named sections with timestamps, topics, and summaries
-- **FTS5 full-text search** — fast keyword search across all indexed content
+- **Hybrid retrieval** — chat excerpt search fuses FTS5 keyword ranking with semantic vector similarity (Reciprocal Rank Fusion), so answers scale with the library and handle paraphrased questions
 - **Transcripts page** — `/transcripts` finds sermons by date, theme, or keyword (natural-language or structured filters) and delivers viewable transcripts + on-demand PDF download
-- **Embeddings** — 384-dim vectors stored per chunk for future vector search
+- **Embeddings** — 384-dim per-chunk vectors (`all-MiniLM-L6-v2`) powering the semantic half of hybrid retrieval
 - **MCP server** — 4 read-only tools for church members to query via Claude Desktop
 - **In-process job queue** — sequential ingestion, non-blocking admin UI
 - **Duplicate detection** — same URL ingested twice is a no-op

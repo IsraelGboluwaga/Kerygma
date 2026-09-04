@@ -34,15 +34,17 @@ Three read-only tools, dispatched by `runChatTool()` in `src/web/router.ts`:
 
 | Tool | Backed by | Use for |
 |------|-----------|---------|
-| `search_sermon_excerpts` | `searchChunks()` (FTS5, top 10) | "What does X teach about Y" — returns a relevant **sample** of excerpts with citations |
+| `search_sermon_excerpts` | `hybridSearchChunks()` (FTS5 + semantic vectors, RRF-fused, top 15) | "What does X teach about Y" — returns a reranked relevant **sample** of excerpts with citations |
 | `list_sermons` | `resolveTranscriptSermons()` (date / topic / speaker) | "List/count sermons in month X / by speaker / about topic" — returns the **complete** matching roster |
 | `find_sermon` | `findSermonsByTitle()` (title `LIKE`, optional speaker/date) | "What's the YouTube link / video / recording for the sermon on X" — returns the named sermon's details including its **YouTube link** (`webpage_url`) |
 
-`search_sermon_excerpts` still uses `sanitizeFtsQuery()` under the hood (strips FTS5 special chars and stopwords, wraps tokens in `OR`). `list_sermons` resolves a `{date, topic, speaker}` filter to the full sermon list — by priority topic > theme > date > speaker, then applies the remaining filters as predicates (the same resolver the transcripts page uses). **This is the completeness guarantee:** a month query hits `getSermonsByDate('2023-03')` and returns every sermon in March, not whatever ranked in a keyword search.
+`search_sermon_excerpts` runs **hybrid retrieval** (`src/retrieval.ts` → `hybridSearchChunks`): it fuses a lexical FTS5 ranking (`searchChunks`, which still uses `sanitizeFtsQuery()` — strips FTS5 special chars and stopwords, wraps tokens in `OR`) with a **semantic** ranking, so paraphrased questions with no keyword overlap ("HANDS acronym to defend the deity of Christ") still find the right chunk. The semantic leg embeds the query with the **same** embedder used at ingest (`generateEmbedding`, `Xenova/all-MiniLM-L6-v2`) and scores it by cosine against every stored `chunks.embedding` (L2-normalised, so cosine == dot product). The two rankings are combined with **Reciprocal Rank Fusion** (`score = Σ 1/(60 + rank)`), which fuses by rank rather than raw score so BM25 and cosine never have to be normalised onto a common scale. `CANDIDATE_K = 50` candidates come from each leg; the fused list is truncated to `DEFAULT_RESULT_K = 15` — a reranked bump from the old fixed top-10, so coverage scales with the library instead of thinning as it grows. If the embedder is still warming up (it loads in the background at startup) or the query embeds to a zero vector, the semantic leg is skipped and the search degrades to FTS-only rather than erroring. The vector scan is a brute-force linear pass — deliberately the simplest thing that holds at the current corpus size (~10³–10⁴ chunks); scan time is logged so the crossover to an ANN index (`sqlite-vec`, ~100k chunks) stays measurable.
+
+`list_sermons` resolves a `{date, topic, speaker}` filter to the full sermon list — by priority topic > theme > date > speaker, then applies the remaining filters as predicates (the same resolver the transcripts page uses). **This is the completeness guarantee:** a month query hits `getSermonsByDate('2023-03')` and returns every sermon in March, not whatever ranked in a keyword search.
 
 `find_sermon` matches the requested text against the sermon **title** (case-insensitive substring), so a member can name a sermon and get its watch link without knowing the exact title. When the matched sermon has no `webpage_url` on file the result says `YouTube: (no link on file)` and the system prompt instructs Claude to say so plainly rather than invent a URL.
 
-All three tools' optional `speaker` filter resolves aliases the same way, via a shared `matchesSpeaker()` helper in `router.ts` (alias → canonical name via `resolveAliasToCanonical`, then a case-insensitive substring match) — this used to be reimplemented per tool and had drifted, so `find_sermon` silently skipped alias resolution. `search_sermon_excerpts` pushes the resolved speaker into the `searchChunks()` SQL query itself (rather than filtering the top-10 rows in JS afterward), so a speaker filter narrows the ranked set instead of shrinking a fixed-size sample.
+All three tools' optional `speaker` filter resolves aliases the same way, via a shared `matchesSpeaker()` helper in `router.ts` (alias → canonical name via `resolveAliasToCanonical`, then a case-insensitive substring match) — this used to be reimplemented per tool and had drifted, so `find_sermon` silently skipped alias resolution. `search_sermon_excerpts` pushes the resolved speaker into **both** retrieval legs (the `searchChunks()` FTS SQL and the `getChunkEmbeddings()` vector scan) rather than filtering the results in JS afterward, so a speaker filter narrows the ranked set instead of shrinking a fixed-size sample.
 
 The system prompt steers tool selection explicitly: use `list_sermons` (not excerpt search) for any list/count, treat its result as the authoritative complete set, and don't caveat with "these are only the ones in the excerpts I was given" — the exact failure mode that motivated this design. For a link/video request about a named sermon, it routes to `find_sermon`.
 
@@ -111,7 +113,9 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 
 | Parameter | Value | Where set |
 |-----------|-------|-----------|
-| Chunks per `search_sermon_excerpts` call | 10 | `router.ts` → `searchChunks(query, 10)` |
+| Excerpts per `search_sermon_excerpts` call | 15 (`DEFAULT_RESULT_K`) | `retrieval.ts` → `hybridSearchChunks(query, { limit })` |
+| Candidates pulled per retrieval leg (FTS + vector) | 50 (`CANDIDATE_K`) | `retrieval.ts` |
+| RRF fusion constant `k` | 60 (`RRF_K`) | `retrieval.ts` |
 | Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
 | Sermons per `find_sermon` call | up to 10 | `router.ts` → `findSermonsByTitle(title, 10)` |
 | Max agentic loop steps per turn | 6 | `router.ts` → `for (let step = 0; step < 6; …)` |
@@ -119,7 +123,7 @@ The system prompt explicitly instructs Claude to respond warmly to greetings and
 | Chat rate limit | 30 req/min per IP | `router.ts` → `POST /api/chat` |
 | Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
 
-Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because it groups results by sermon and presents them structured rather than as a synthesised narrative.
+Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 15) because it groups results by sermon and presents them structured rather than as a synthesised narrative. It uses the same `hybridSearchChunks` path.
 
 ---
 
@@ -130,7 +134,8 @@ Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 10) because
 | `frontend/src/pages/ChatPage.tsx` | Chat UI, message rendering, streaming bubbles, sources `<details>` |
 | `frontend/src/api/client.ts` | `streamChat()` — SSE reader / async generator of chat events |
 | `src/web/router.ts` | `POST /api/chat` handler, agentic loop, `CHAT_TOOLS`, `runChatTool()` |
-| `src/db/queries.ts` | `searchChunks()`, `getSermonsByDate()`, `sanitizeFtsQuery()`, FTS5 query |
+| `src/retrieval.ts` | `hybridSearchChunks()` — FTS5 + semantic vector search fused with RRF (the `search_sermon_excerpts` backend, shared by MCP) |
+| `src/db/queries.ts` | `searchChunks()` (FTS5), `getChunkEmbeddings()`, `getChunksByIds()`, `getSermonsByDate()`, `sanitizeFtsQuery()` |
 | `src/ingestion/chunker.ts` | `formatTimestamp()` used in context headers |
 | `src/logger.ts` | Runtime logging (Winston) |
 | `src/config.ts` | `MINISTRY_NAME`, `CLAUDE_MODEL` |

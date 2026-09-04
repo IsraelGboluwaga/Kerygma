@@ -11,9 +11,9 @@ import {
   getNearestSermonByDate,
   getSpeakersMatchingFilter,
   listSermons,
-  searchChunks,
   type ChunkWithSermon,
 } from '../db/queries.js'
+import { hybridSearchChunks, DEFAULT_RESULT_K } from '../retrieval.js'
 import { formatTimestamp } from '../ingestion/chunker.js'
 import { formatSermonExcerpts } from '../citations.js'
 
@@ -180,9 +180,9 @@ export function createMcpServer(anthropic: Anthropic): McpServer {
         if (!dateResult.ok) return dateResult
         results = dateResult.chunks
       } else {
-        // Filter by speaker in the query itself (not after the top-10 limit)
-        // so a speaker filter narrows the ranked set instead of shrinking it.
-        results = searchChunks(question, 10, resolvedSpeaker)
+        // Hybrid retrieval (FTS5 + semantic vectors, RRF-fused). The speaker
+        // filter narrows both retrievers, not a post-hoc trim of a fixed sample.
+        results = await hybridSearchChunks(question, { limit: DEFAULT_RESULT_K, speaker: resolvedSpeaker })
       }
 
       if (results.length === 0) {
@@ -304,9 +304,10 @@ Cite the sermon title, date, and relevant timestamps where appropriate.${youtube
       if (!sf.ok) return sf.response
       const resolvedSpeaker = sf.name
 
-      // Filter by speaker in the query itself (not after the top-20 limit) so
-      // a speaker filter narrows the ranked set instead of shrinking it.
-      const results = searchChunks(topic, 20, resolvedSpeaker)
+      // Hybrid retrieval (FTS5 + semantic vectors, RRF-fused); 20 results keeps
+      // breadth for the per-sermon grouping below. Both retrievers honour the
+      // speaker filter, so it narrows the ranked set rather than trimming it.
+      const results = await hybridSearchChunks(topic, { limit: 20, speaker: resolvedSpeaker })
 
       if (results.length === 0) {
         return textResult(`No teachings found on '${topic}'.`)

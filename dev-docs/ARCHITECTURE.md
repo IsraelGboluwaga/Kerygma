@@ -38,7 +38,7 @@ MCP Client (Claude Desktop / any MCP-compatible app)
     │  HTTP POST /mcp
     ▼
 McpServer (4 read-only tools)
-    └── better-sqlite3 reads (FTS5 search + Claude synthesis)
+    └── better-sqlite3 reads (hybrid FTS5 + vector search + Claude synthesis)
 ```
 
 ---
@@ -101,7 +101,9 @@ Typed functions for every DB operation:
 - `getNearestSermonByDate(date)` → `SermonRow | null` — closest sermon when exact date has no results
 - `getSpeakersMatchingFilter(filter)` → `string[]` — distinct speaker names matching substring
 - `getChunksBySermonId(id)` → `ChunkRow[]`
-- `searchChunks(query, limit, speaker?)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance. The optional `speaker` is matched (case-insensitive substring) inside the SQL query itself, before the `LIMIT`, so a speaker filter narrows the ranked set instead of discarding rows from an already-limited top-N sample
+- `searchChunks(query, limit, speaker?)` → `ChunkWithSermon[]` — FTS5 search with stopword filtering and OR semantics; meaningful keywords are matched against any chunk, ranked by relevance. The optional `speaker` is matched (case-insensitive substring) inside the SQL query itself, before the `LIMIT`, so a speaker filter narrows the ranked set instead of discarding rows from an already-limited top-N sample. This is now the **lexical leg** of hybrid retrieval (`src/retrieval.ts`) as well as the FTS primitive used directly by tests
+- `getChunkEmbeddings(speaker?)` → `ChunkEmbeddingRow[]` — every stored chunk embedding (`id` + raw 384-dim Float32 blob) for the brute-force semantic scan; the optional `speaker` applies the same substring filter as `searchChunks` so the vector candidate set honours the same narrowing. Rows without an embedding are excluded
+- `getChunksByIds(ids)` → `ChunkWithSermon[]` — hydrates a set of chunk ids into full citation rows (same shape as `searchChunks`); used by `hybridSearchChunks` to fetch the rows that arrived via the vector path alone. Order is not preserved (caller reorders to the fused ranking)
 - `getSermonsBySpeaker(speaker)` → `SermonRow[]` — speaker/alias substring match done in SQL (not a broad fetch-then-filter-in-JS)
 - `getSermonIdsWithTranscription(sermonIds)` → `Set<number>` — batched `hasTranscript` existence check for a page of sermon rows (one query, not one per row)
 - `getTableColumns` / `getTableRowCount` / `getTableRows` / `DB_BROWSER_TABLES` — the DB browser's raw-SQL access, validated against the `DB_BROWSER_TABLES` allow-list (table names can't be bound as query params)
@@ -144,7 +146,31 @@ Exported as an async generator: `fetchAllSermons(): AsyncGenerator<IngestRequest
 ### `src/ingestion/embedder.ts`
 Loads `Xenova/all-MiniLM-L6-v2` once at startup (~90MB download on first run).
 `generateEmbedding(text)` returns a `Buffer` of raw Float32 bytes (384 floats = 1536 bytes).
-Stored in `chunks.embedding BLOB` for future vector search — not queried yet.
+Vectors are L2-normalised (`normalize: true`), so cosine similarity reduces to a dot product.
+Stored in `chunks.embedding BLOB` and queried by the hybrid retrieval path (`src/retrieval.ts`):
+the same embedder embeds the incoming query, which is scored against these vectors.
+
+### `src/retrieval.ts`
+Hybrid excerpt retrieval — the search path behind the chat's `search_sermon_excerpts`
+tool and the MCP `ask_church`/`search_teachings` tools. Fuses two candidate rankings:
+- **lexical** — `searchChunks` (FTS5 `MATCH ... ORDER BY rank`)
+- **semantic** — cosine similarity of the query embedding against every stored chunk vector
+
+Fusion is **Reciprocal Rank Fusion** (`score = Σ 1/(k + rank)`, `k = 60`), which combines by
+*rank* rather than raw score, so it never has to normalise BM25's rank metric against cosine
+similarity. `CANDIDATE_K = 50` candidates are pulled from each leg, fused, and truncated to the
+requested `limit` (`DEFAULT_RESULT_K = 15`, a reranked bump from the old fixed top-10).
+
+Vector search is a **brute-force in-process scan** — the simplest thing that holds at the current
+corpus size (one church's library, ~10³–10⁴ chunks): a linear dot-product scan over normalised
+384-d vectors is single-digit-to-tens-of-ms and needs no native ANN dependency or index to
+maintain, matching the single-singleton, no-pooling SQLite design. Scan time is logged (debug,
+escalating to warn past ~50 ms) so the crossover to `sqlite-vec`/an ANN index (~100k chunks) stays
+measurable. `hybridSearchChunks` degrades to FTS-only if the embedder is still warming up or the
+query embeds to a degenerate zero vector — chat keeps working during startup. Embedding blobs are
+length-validated and copied into an aligned buffer before decode (guards truncated rows and Node
+Buffer-pool misalignment). `getChunkEmbeddings`/`getChunksByIds`/`searchChunks` keep all SQL in
+`queries.ts`; the cosine + fusion math (not SQL) lives here.
 
 ### `src/ingestion/pipeline.ts`
 Orchestrates the full ingestion flow for one sermon:
@@ -208,7 +234,7 @@ Registers 4 tools:
 3. `summarise_sermon(date, speaker?)` — full Claude-synthesised summary of a sermon; speaker disambiguation + nearest-date fallback
 4. `search_teachings(topic, speaker_filter?)` — topic search; speaker disambiguation built in
 
-Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`, `textResult`/`textContent` (build a `CallToolResult` from plain text). Once `speaker_filter` is resolved to a single canonical name (via `resolveSpeaker`/`getSpeakersMatchingFilter`), `ask_church` and `search_teachings` pass it straight into `searchChunks(query, limit, speaker)` so the DB filters before the row limit is applied, instead of fetching a fixed-size sample and discarding non-matching rows afterward.
+Shared helpers: `resolveSpeaker`, `fetchChunksByDateAndSpeaker`, `nearestDateMessage`, `textResult`/`textContent` (build a `CallToolResult` from plain text). Once `speaker_filter` is resolved to a single canonical name (via `resolveSpeaker`/`getSpeakersMatchingFilter`), `ask_church` (search branch) and `search_teachings` pass it straight into `hybridSearchChunks(query, { limit, speaker })` — the same hybrid (FTS5 + semantic vectors, RRF-fused) path the chat uses — so the speaker narrows both retrievers before the row limit is applied, instead of fetching a fixed-size sample and discarding non-matching rows afterward. The tools stay read-only (retrieval only reads).
 
 ### `frontend/` — React + Vite SPA
 The entire member- and admin-facing UI is a single-page React app (TypeScript + Tailwind, mobile-responsive) built by Vite. The backend no longer renders HTML — it exposes JSON/SSE APIs under `/api/*` (plus the PDF download) and serves the built SPA. Key files:
@@ -248,7 +274,7 @@ Pure formatting helpers shared by the transcripts table, view, and PDF: `formatS
 Hono app wiring all routes. The UI pages are client-side routes served by the SPA catch-all; this layer is JSON/SSE + static serving only.
 
 **Chat**
-- `POST /api/chat` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given three read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool`): `search_sermon_excerpts` (FTS5 chunk search, a relevant sample), `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any), and `find_sermon` (look up a named sermon's details, notably its YouTube link). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
+- `POST /api/chat` — accepts `{ messages }` and runs an **agentic** Claude loop streamed over SSE. Claude is given three read-only tools (`CHAT_TOOLS`, dispatched by the async `runChatTool`): `search_sermon_excerpts` (**hybrid** FTS5 + semantic-vector chunk search via `hybridSearchChunks`, a reranked relevant sample), `list_sermons` (the **complete** roster for a date/topic/speaker filter, via `resolveTranscriptSermons` — so enumeration questions like "all sermons that month" don't miss any), and `find_sermon` (look up a named sermon's details, notably its YouTube link). Returns 404 if the library is empty. The system prompt is cached (`cache_control`) so the tools+system prefix is cheap to reuse across the loop's calls
 
 **Transcripts** — public, read-only transcript delivery
 - `GET /api/themes` — returns `{ id, name }[]` for the structured filter dropdown
@@ -294,8 +320,8 @@ Member types question → POST /api/chat { messages: [...] }
     → agentic loop (≤6 steps), each step = anthropic.messages.stream(... CHAT_TOOLS):
         stream { type: 'delta', text }            token by token
         finalMessage → stop_reason !== 'tool_use'? end loop
-        else runChatTool() per tool_use block:
-            search_sermon_excerpts → searchChunks(query, 10)   relevant sample
+        else await runChatTool() per tool_use block:
+            search_sermon_excerpts → hybridSearchChunks(query)  FTS5 + vector, RRF-fused (top 15)
             list_sermons           → resolveTranscriptSermons  COMPLETE roster
             find_sermon            → findSermonsByTitle        named sermon + YouTube link
         { type: 'context', sources }              cumulative citations
@@ -368,7 +394,7 @@ e.g. summarise_sermon("2024-03-12", "Apostle")
     → return narrative text
 
 e.g. ask_church("What was taught about faith?")
-    → searchChunks("What was...")        FTS5 query
+    → hybridSearchChunks("What was...")  FTS5 + semantic vectors, RRF-fused
     → Anthropic API                      answer with citations
     → return answer text
 ```
@@ -425,7 +451,7 @@ CREATE TABLE chunks (
     timestamp_end   REAL NOT NULL,
     topics          TEXT,               -- JSON array
     summary         TEXT,
-    embedding       BLOB                -- Float32[384], future vector search
+    embedding       BLOB                -- Float32[384], L2-normalised; queried by hybrid retrieval (cosine)
 );
 
 -- Full-text search (auto-synced via 3 triggers)
