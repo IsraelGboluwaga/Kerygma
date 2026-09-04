@@ -86,8 +86,10 @@ Claude is called with:
 
 - On `context` — stores sources on the current assistant turn; the `<details>` attaches/refreshes even if it arrives before the answer text
 - On `delta` — the assistant bubble replaces the typing dots on the first token, then markdown (`marked`) re-renders incrementally as text accumulates
-- On `done` — the turn is marked complete and stays in state for future turns
+- On `done` — the turn is marked complete and stays in state for future turns. If the stream finished without producing any answer text, the empty bubble is replaced by an `EmptyAnswer` notice ("I couldn't find anything…") instead of rendering a blank bubble
 - On `error` — drops the empty assistant placeholder and shows an error banner
+
+While an answer is pending, the assistant bubble shows animated typing dots with a status label — `Searching the sermon library…` before any sources arrive, then `Reading the sermons…` once a `context` event has landed — so members always see that work is in progress rather than a silent empty bubble.
 
 Sources appear as a collapsible `<details>` element below the response bubble, showing sermon title, date, and (for excerpts) timestamp. The `section_name` from the chunk is not surfaced in the Sources widget — only the sermon-level metadata is shown.
 
@@ -97,7 +99,7 @@ Sources appear as a collapsible `<details>` element below the response bubble, s
 
 The entire conversation history is kept client-side and sent to the backend on every request. There is no server-side session. This means:
 
-- Conversations persist across page refreshes, tab closes, and browser restarts — `ConversationsContext` mirrors all conversations (and the active tab) to `localStorage` under the `kerygma_convos` key, so a returning member finds their chats waiting. Use the "New" button / `+` tab to start a fresh conversation; closing a tab removes that conversation from the saved state.
+- Conversations persist across page refreshes, tab closes, and browser restarts — `ConversationsContext` mirrors all conversations (and the active tab) to `localStorage` under the `kerygma_convos` key, so a returning member finds their chats waiting. Use the "New" button / `+` tab to start a fresh conversation; closing a tab removes that conversation from the saved state. The tab strip is ordered with the `+` button first, followed by conversations newest-first, so a freshly opened chat is always reachable without scrolling to the end of the strip.
 - Persistence is per-device/browser (no auth, no server-side session), and transient flags are sanitised on load: `busy`/`error` reset and any mid-stream `streaming` turn is finalised so a reload never restores a stuck "typing" bubble.
 - Claude can reference earlier exchanges in follow-up answers
 - Each turn independently re-runs the agentic loop and re-queries the DB, so answers always reflect the current library — and "that month/series" references resolve from the conversation before the tool call

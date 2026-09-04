@@ -16,16 +16,33 @@ function conversationTitle(c: Conversation): string {
   return text.length > 24 ? `${text.slice(0, 24)}…` : text
 }
 
-function TypingDots() {
+function TypingDots({ label }: { label?: string }) {
   return (
-    <div className="flex w-fit items-center gap-1 rounded-2xl rounded-bl-sm border border-line bg-surface-raised px-4 py-3">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 animate-bounce rounded-full bg-ink-ghost"
-          style={{ animationDelay: `${i * 0.18}s` }}
-        />
-      ))}
+    <div
+      className="flex w-fit items-center gap-2 rounded-2xl rounded-bl-sm border border-line bg-surface-raised px-4 py-3"
+      role="status"
+      aria-live="polite"
+    >
+      <span className="flex items-center gap-1">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-1.5 w-1.5 animate-bounce rounded-full bg-ink-ghost"
+            style={{ animationDelay: `${i * 0.18}s` }}
+          />
+        ))}
+      </span>
+      {label && <span className="text-[0.8rem] text-ink-faint">{label}</span>}
+    </div>
+  )
+}
+
+/** Shown when a stream completes without the assistant producing any answer text. */
+function EmptyAnswer() {
+  return (
+    <div className="rounded-2xl rounded-bl-sm border border-line bg-surface-raised px-4 py-2.5 text-[0.9rem] italic leading-relaxed text-ink-faint">
+      I couldn&rsquo;t find anything in the sermon library to answer that. Try
+      rephrasing your question, or ask about a specific topic, speaker, or date.
     </div>
   )
 }
@@ -164,9 +181,17 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* In-page conversation tabs */}
+      {/* In-page conversation tabs — "+" first, then newest conversation first
+          so a freshly opened chat is always reachable without scrolling. */}
       <div className="flex flex-shrink-0 items-center gap-1 overflow-x-auto border-b border-line bg-bg px-2 py-1.5">
-        {conversations.map((c) => {
+        <button
+          aria-label="New conversation"
+          className="flex-shrink-0 rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[0.8rem] text-ink-dim transition-colors hover:text-ink-bright"
+          onClick={addConversation}
+        >
+          +
+        </button>
+        {[...conversations].reverse().map((c) => {
           const isActive = c.id === activeId
           return (
             <div
@@ -199,13 +224,6 @@ export default function ChatPage() {
             </div>
           )
         })}
-        <button
-          aria-label="New conversation"
-          className="flex-shrink-0 rounded-md border border-line-strong bg-surface px-2.5 py-1 text-[0.8rem] text-ink-dim transition-colors hover:text-ink-bright"
-          onClick={addConversation}
-        >
-          +
-        </button>
       </div>
 
       <div ref={listRef} className="flex flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-6">
@@ -226,8 +244,16 @@ export default function ChatPage() {
               </div>
             ) : (
               <div key={i} className="flex max-w-[min(75%,680px)] flex-col items-start self-start">
-                {t.streaming && t.content === '' ? (
-                  <TypingDots />
+                {t.streaming && t.content.trim() === '' ? (
+                  <TypingDots
+                    label={
+                      t.sources && t.sources.length > 0
+                        ? 'Reading the sermons…'
+                        : 'Searching the sermon library…'
+                    }
+                  />
+                ) : t.content.trim() === '' ? (
+                  <EmptyAnswer />
                 ) : (
                   <div
                     className="prose-chat break-words rounded-2xl rounded-bl-sm border border-line bg-surface-raised px-4 py-2.5 text-[0.93rem] leading-relaxed text-ink"
