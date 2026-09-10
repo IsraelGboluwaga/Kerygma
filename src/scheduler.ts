@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { logger } from './logger.js'
 import { errMsg } from './utils.js'
 import { enqueue, getQueueDepth } from './queue.js'
-import { getDoneVideoIds, getMissingVideoIdsByKind, getConfig, setConfig } from './db/queries.js'
+import { getDoneVideoIds, getMissingVideoIdsByKind, setConfig } from './db/queries.js'
 import { fetchAllSermons } from './ingestion/api-source.js'
 import { ingestSermon } from './ingestion/pipeline.js'
 
@@ -60,40 +60,13 @@ export async function syncFromApi(anthropic: Anthropic): Promise<void> {
   logger.info(`API sync complete: ${enqueued} enqueued, ${skipped} already ingested`)
 }
 
-const FREQUENT_UNTIL_KEY = 'scheduler_frequent_until'
-const FOUR_DAYS_MS = 4 * 24 * 60 * 60 * 1000
+export function startScheduler(anthropic: Anthropic): void {
+  // Always sync immediately on startup so a fresh deploy or restart doesn't
+  // wait until the next 06:00 for the first batch of sermons to be enqueued.
+  void syncFromApi(anthropic)
 
-function startDailyCron(anthropic: Anthropic): void {
   cron.schedule('0 6 * * *', () => {
     void syncFromApi(anthropic)
   })
-  logger.info('Scheduler updated — syncing daily at 06:00')
-}
-
-export function startScheduler(anthropic: Anthropic): void {
-  const stored = getConfig(FREQUENT_UNTIL_KEY)
-  const deadline = stored ? parseInt(stored, 10) : Date.now() + FOUR_DAYS_MS
-  if (!stored) setConfig(FREQUENT_UNTIL_KEY, String(deadline))
-
-  // Always sync immediately on startup so a fresh deploy or restart doesn't
-  // wait up to 10 hours for the first batch of sermons to be enqueued.
-  void syncFromApi(anthropic)
-
-  const remainingMs = deadline - Date.now()
-
-  if (remainingMs <= 0) {
-    startDailyCron(anthropic)
-    return
-  }
-
-  // Frequent phase: every 10 hours until the persisted deadline
-  const frequentTask = cron.schedule('0 */10 * * *', () => {
-    void syncFromApi(anthropic)
-  })
-  logger.info(`Scheduler started — syncing every 10 hours for ${Math.ceil(remainingMs / 3_600_000)} more hour(s)`)
-
-  setTimeout(() => {
-    frequentTask.stop()
-    startDailyCron(anthropic)
-  }, remainingMs)
+  logger.info('Scheduler started — syncing daily at 06:00')
 }

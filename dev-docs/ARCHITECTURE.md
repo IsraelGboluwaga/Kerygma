@@ -208,10 +208,9 @@ Input:
 upstream `themeId`) and the sermon stores the resulting `themes.id` as `theme_id`. Speaker is required.
 
 ### `src/scheduler.ts`
-On startup, calls `syncFromApi()` immediately so a fresh deploy doesn't wait up to 10 hours for
-the first batch. Then registers a `node-cron` job: every 10 hours for the first 4 days, then
-daily at 06:00 (`'0 6 * * *'`) for ongoing syncs. The phase switch is handled via a
-`setTimeout` that stops the frequent task and starts the daily one.
+On startup, calls `syncFromApi()` immediately so a fresh deploy doesn't wait until the next
+06:00 for the first batch. Then registers a single `node-cron` job that runs daily at 06:00
+(`'0 6 * * *'`) for ongoing syncs.
 
 `syncFromApi` enqueues every sermon from the API except those already fully ingested
 (`ingestion_status === 'done'`). The done check is an in-memory `Set` membership test: the run
@@ -318,7 +317,7 @@ Sequential startup:
 2. `loadEmbedder()` — warm up the embedding model
 3. Raw `http.createServer()` — `/mcp` dispatches to a fresh `McpServer` per request;
    everything else passes through `getRequestListener(app.fetch)` (Hono)
-4. `startScheduler(anthropic)` — registers cron job (every 10 h for 4 days, then daily 06:00)
+4. `startScheduler(anthropic)` — syncs immediately, then registers a daily cron job at 06:00
 5. `SIGTERM` / `SIGINT` handlers — wait for the active job to finish before exiting
 
 ---
