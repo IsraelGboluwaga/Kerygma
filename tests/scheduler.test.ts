@@ -115,12 +115,17 @@ describe('syncFromApi', () => {
 })
 
 describe('startScheduler', () => {
-  it('registers a cron job for Mon + Thu at 06:00', () => {
+  it('registers a daily cron job at 06:00', () => {
     startScheduler(fakeAnthropicClient)
 
-    expect(cron.schedule).toHaveBeenCalledWith(
-      '0 */10 * * *', //'0 6 * * 1,4',
-      expect.any(Function)
-    )
+    expect(cron.schedule).toHaveBeenCalledWith('0 6 * * *', expect.any(Function))
+  })
+
+  it('syncs immediately on startup', () => {
+    mockFetchAllSermons.mockReturnValue(makeAsyncGenerator([]))
+
+    startScheduler(fakeAnthropicClient)
+
+    expect(mockFetchAllSermons).toHaveBeenCalledTimes(1)
   })
 })
