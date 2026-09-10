@@ -1,6 +1,6 @@
 # Kerygma
 
-> A church sermon knowledge base — admins ingest MP3 sermons via a web UI, church members query via MCP.
+> A church sermon knowledge base — a scheduled job syncs new sermons from the ministry's sermon API, transcribes the audio with OpenAI Whisper, chunks it into semantic sections with Claude, and embeds it into SQLite; members ask questions through a chat UI or any MCP client.
 
 **Kerygma** (κήρυγμα) — Greek for "proclamation" or "preaching of the gospel"
 
@@ -11,7 +11,7 @@
 
 ## Overview
 
-Kerygma lets church administrators paste an MP3 URL into a web form. The server downloads the audio, transcribes it with Whisper, divides it into semantic sections using Claude, generates embeddings, and saves everything to SQLite with FTS5 full-text search. Church members then query the knowledge base through any MCP-compatible client (e.g. Claude Desktop).
+Kerygma keeps itself in sync with a ministry's sermon API. A background scheduler polls the API daily at 06:00 and enqueues any new sermons (administrators can also trigger ingestion manually from the admin web UI). For each sermon the server downloads the audio, transcribes it with the OpenAI Whisper API, divides it into semantic sections using Claude, generates embeddings, and saves everything to SQLite with FTS5 full-text search. Church members then query the knowledge base through the built-in chat UI or any MCP-compatible client (e.g. Claude Desktop).
 
 ### Features
 
@@ -110,16 +110,13 @@ kerygma/
 │   ├── assets/                    # Logos/icons served at /assets
 │   └── app/                       # Vite build output (gitignored, created by yarn build:web)
 ├── tests/
-│   ├── setup.ts                   # Env vars for test context
-│   ├── db.test.ts                 # Storage layer (26 tests)
-│   ├── chunker.test.ts            # Pure unit tests (12 tests)
-│   ├── ingestion.test.ts          # Pipeline tests, mocked (12 tests)
-│   └── queue.test.ts              # Queue behaviour (8 tests)
+│   ├── setup.ts                   # Shared env stubs, loaded before every test file
+│   └── *.test.ts                  # 18 files covering ingestion, retrieval, chat tools, the
+│                                   #   queue, transcripts, book generation, and more (Vitest)
 ├── data/
 │   └── sermons.db                 # SQLite database (created at runtime, gitignored)
 ├── dev-docs/
-│   ├── ARCHITECTURE.md            # Detailed technical architecture and data flows
-│   └── CHAT.md                    # Chat feature deep-dive
+│   └── ARCHITECTURE.md            # Detailed technical architecture, data flows, and the Chat deep-dive
 ├── Dockerfile
 ├── .dockerignore
 ├── mcpConnect.md                  # MCP connection guide (Claude Desktop + deployed)
@@ -282,6 +279,7 @@ What has Apostle Emmanuel Iren said about healing?
 | `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model for chat synthesis |
 | `CHUNKING_MODEL` | No | `claude-haiku-4-5-20251001` | Claude model for semantic chunking |
 | `BOOK_MODEL` | No | `CLAUDE_MODEL` | Claude model used to draft book chapters (falls back to `CLAUDE_MODEL`) |
+| `LOG_LEVEL` | No | `info` | Winston log level (`debug`, `info`, `warn`, `error`) |
 | `R2_ACCOUNT_ID` | No | — | Cloudflare account ID for Litestream replication and dated archive exports |
 | `R2_ACCESS_KEY_ID` | No | — | R2 access key ID for Litestream replication and dated archive exports |
 | `R2_SECRET_ACCESS_KEY` | No | — | R2 secret access key for Litestream replication and dated archive exports |
@@ -357,6 +355,15 @@ yarn test:coverage  # vitest with v8 coverage report
 ```
 
 `yarn dev` runs the frontend on `http://localhost:5173` (which proxies API calls to the backend on `:3000`) — open that URL while developing. For the backend you need ffmpeg installed on your machine (`brew install ffmpeg`) — it compresses audio over 25 MB before upload to the Whisper API. The React frontend lives in `frontend/` as a yarn workspace, so a single `yarn install` at the repo root installs everything.
+
+### Testing
+
+The committed test suite is 18 files covering 169 tests (Vitest), all passing — one file per
+source module/concern, living flat in `tests/` with shared env stubs in `tests/setup.ts`. All
+external I/O (Anthropic, OpenAI Whisper, filesystem) is mocked; no real API calls are made in
+tests. (The working tree may also contain uncommitted, in-progress test files exercising
+not-yet-shipped modules — those aren't part of the committed suite above and aren't expected to
+pass.)
 
 ---
 
