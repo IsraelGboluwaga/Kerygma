@@ -239,9 +239,6 @@ Job phases are reported through the `setPhase` callback, giving the status dashb
 ### `src/citations.ts`
 `formatSermonExcerpt`/`formatSermonExcerpts` — the shared `[title | ... | timestamp | URL]\ncontent` excerpt format (and its `EXCERPT_CONTENT_CAP` truncation length) used by both the MCP server's `buildContext()` and the chat's `search_sermon_excerpts` tool, so the citation format and cap live in one place instead of two independently-maintained copies.
 
-### `src/citations.ts`
-`formatSermonExcerpt`/`formatSermonExcerpts` — the shared `[title | ... | timestamp | URL]\ncontent` excerpt format (and its `EXCERPT_CONTENT_CAP` truncation length) used by both the MCP server's `buildContext()` and the chat's `search_sermon_excerpts` tool, so the citation format and cap live in one place instead of two independently-maintained copies.
-
 ### `src/mcp/server.ts`
 `createMcpServer(anthropic)` — accepts an injected Anthropic client.
 Registers 4 tools:
@@ -418,6 +415,109 @@ e.g. ask_church("What was taught about faith?")
     → Anthropic API                      answer with citations
     → return answer text
 ```
+
+---
+
+## Chat
+
+The chat UI lets church members ask questions about sermons in plain English and get answers
+grounded in actual sermon content, with citations. It is **agentic**: instead of pre-running one
+search and stuffing the results into the prompt, `POST /api/chat` (`src/web/router.ts`) hands
+Claude a small set of read-only tools (`CHAT_TOOLS`, dispatched by `runChatTool()`) and lets it
+choose the lookup per question. The motivating fix was enumeration: "what sermons were preached
+that month?" needs the **complete** roster, which a top-N relevance search cannot guarantee.
+
+### Tools
+
+| Tool | Backed by | Use for |
+|------|-----------|---------|
+| `search_sermon_excerpts` | `hybridSearchChunks()` (`src/retrieval.ts`) — FTS5 + semantic vectors, RRF-fused, top `DEFAULT_RESULT_K` (15) | "What does X teach about Y" — a reranked relevant **sample** of excerpts with citations |
+| `list_sermons` | `resolveTranscriptSermons()` (date / topic / speaker) | "List/count sermons in month X / by speaker / about topic" — the **complete** matching roster |
+| `find_sermon` | `findSermonsByTitle()` (title `LIKE`, optional speaker/date) | "What's the YouTube link for the sermon on X" — the named sermon's details including its **YouTube link** (`webpage_url`) |
+
+**Enumeration vs. excerpt search is enforced in code, not just prompt wording**: `list_sermons`
+resolves a `{date, topic, speaker}` filter to the full sermon list (base set by priority topic >
+theme > date > speaker, then remaining filters applied) — the same resolver the transcripts page
+uses — so a month query hits `getSermonsByDate('2023-03')` and returns *every* sermon in March,
+never a ranked sample. The system prompt reinforces this: use `list_sermons` (not excerpt search)
+for any list/count, treat its result as the authoritative complete set, and never caveat with
+"these are only the ones in the excerpts I was given."
+
+`search_sermon_excerpts` runs the **hybrid retrieval** described above (`src/retrieval.ts` →
+`hybridSearchChunks`): FTS5 lexical ranking fused via RRF with a semantic cosine ranking over the
+same version-pinned embedder used at ingest, degrading to FTS-only if the embedder is still
+warming up. This is what lets the chat handle paraphrases with no keyword overlap. `find_sermon`
+matches the requested text against the sermon title (case-insensitive substring); if the matched
+sermon has no `webpage_url` on file, the result says so plainly rather than inventing a URL.
+
+All three tools' optional `speaker` filter resolves aliases the same way, via a shared
+`matchesSpeaker()` helper (alias → canonical name via `resolveAliasToCanonical`, then a
+case-insensitive substring match). `search_sermon_excerpts` pushes the resolved speaker into
+**both** retrieval legs (the `searchChunks()` FTS SQL and the `getChunkEmbeddings()` vector scan)
+rather than filtering results in JS afterward, so a speaker filter narrows the ranked set instead
+of shrinking a fixed-size sample.
+
+### Agentic loop & streaming
+
+The loop is capped at `MAX_STEPS = 6` (`step < MAX_STEPS`). Each step opens an
+`anthropic.messages.stream(...)` call with the tools attached — except the **last** permitted
+step, which withholds the tools entirely (the SDK predates `tool_choice: 'none'`), forcing the
+model to synthesise a final answer from whatever it already has rather than dangling on another
+tool call.
+
+- **Only the answer turn's text reaches the user.** A turn that ends in a tool call usually opens
+  with a "let me search…" preamble; that text is buffered and discarded, never streamed. Only a
+  turn that ends *without* a tool call is the answer, and only its text is surfaced — this avoided
+  the earlier failure mode where every turn's text streamed and the UI showed a pile of preambles
+  (or, if the loop ran out of steps mid-search, a preamble with no answer at all).
+- After each turn, if `stop_reason !== 'tool_use'`, the buffered text is flushed as `delta` event(s)
+  and the loop ends. Otherwise each `tool_use` block runs through `runChatTool()`, citations
+  accumulate and emit as a `context` event, `tool_result` blocks are appended, and the loop
+  continues. The forced-final last step streams its text live instead of buffering it, since it
+  cannot be a preamble.
+- **Sources stream as `context` events *after* tools run**, not before the answer — the frontend's
+  `applySources()` attaches or refreshes the sources `<details>` on the existing bubble whenever a
+  `context` event lands, even if the answer bubble already exists.
+
+**Prompt caching:** a single `cache_control` breakpoint sits on the system prompt, so the
+tools+system prefix — byte-identical across every call in the loop and across turns — is read at
+~0.1× input cost on follow-up calls instead of repaying full price each time. Do not interpolate
+per-request values into that system prompt, or the cache breaks.
+
+SSE event types emitted by the backend:
+
+| Event | When | Payload |
+|-------|------|---------|
+| `context` | After a tool runs (cumulative sources so far) | `{ type: 'context', sources: [{title, date, timestamp?}] }` |
+| `delta` | The answer turn's text (pre-tool preambles suppressed) | `{ type: 'delta', text: '...' }` |
+| `done` | When the loop ends | `{ type: 'done' }` |
+| `error` | On exception | `{ type: 'error', message: '...' }` |
+
+Claude is called with `CLAUDE_MODEL` (default `claude-sonnet-4-6`), `max_tokens: 3072` (headroom
+for a full `list_sermons` roster), and the full conversation history — there is no server-side
+session; each turn re-runs the agentic loop and re-queries the DB live, so answers always reflect
+the current library. The system prompt also instructs Claude to respond warmly to greetings and
+small talk without citing sermon content, avoiding an unhelpful citation of a random sermon on
+"hello". Conversation history is mirrored client-side to `localStorage` (`ConversationsContext`,
+key `kerygma_convos`) so conversations survive refreshes; transient `busy`/`streaming` flags are
+sanitised on load.
+
+### Limits and defaults
+
+| Parameter | Value | Where set |
+|-----------|-------|-----------|
+| Excerpts per `search_sermon_excerpts` call | 15 (`DEFAULT_RESULT_K`) | `src/retrieval.ts` |
+| Candidates pulled per retrieval leg (FTS + vector) | 50 (`CANDIDATE_K`) | `src/retrieval.ts` |
+| RRF fusion constant `k` | 60 (`RRF_K`) | `src/retrieval.ts` |
+| Sermons per `list_sermons` call | up to `MAX_TRANSCRIPT_RESULTS` (100) | `router.ts` → `resolveTranscriptSermons` |
+| Sermons per `find_sermon` call | up to 10 | `router.ts` → `findSermonsByTitle(title, 10)` |
+| Max agentic loop steps per turn | 6 | `router.ts` → `MAX_STEPS` |
+| Max tokens per Claude turn | 3072 | `router.ts` |
+| Claude model | `claude-sonnet-4-6` (overridable) | `config.ts` → `CLAUDE_MODEL` |
+
+Note: the MCP `search_teachings` tool retrieves up to 20 chunks (not 15) via the same
+`hybridSearchChunks` path, since it groups results by sermon and presents them structured rather
+than as a synthesised narrative.
 
 ---
 

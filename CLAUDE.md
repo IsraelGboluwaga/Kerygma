@@ -47,7 +47,7 @@ Kerygma is a TypeScript/Node.js church sermon knowledge base.
 
 Key source files: `src/main.ts`, `src/config.ts`, `src/web/router.ts`, `src/mcp/server.ts`, `src/ingestion/pipeline.ts`, `frontend/src/App.tsx`, `frontend/src/api/client.ts`.
 
-Full architecture: `dev-docs/ARCHITECTURE.md`. Chat deep-dive: `dev-docs/CHAT.md`. MCP setup: `mcpConnect.md`.
+Full architecture, including the Chat deep-dive: `dev-docs/ARCHITECTURE.md`. MCP setup: `mcpConnect.md`.
 
 ---
 
@@ -173,7 +173,7 @@ Copy `.env.example` to `.env` and fill in the required variables before running.
 | New env variable | `README.md` (Configuration table) + `CLAUDE.md` (Environment variables table) + `.env.example` |
 | New/changed source file | `dev-docs/ARCHITECTURE.md` (File Responsibilities section) |
 | New/changed route or API | `dev-docs/ARCHITECTURE.md` (architecture diagram + data flows) |
-| Chat feature changes | `dev-docs/CHAT.md` |
+| Chat feature changes | `dev-docs/ARCHITECTURE.md` (Chat section) |
 | MCP tool changes | `mcpConnect.md` (Available Tools table) + `README.md` (Available Tools section) |
 | New script in `package.json` | `README.md` (Development section) + `CLAUDE.md` (Common commands) |
 | Database schema changes | `README.md` (Database Schema) + `dev-docs/ARCHITECTURE.md` (Database Schema) |
